@@ -1,0 +1,4 @@
+{
+  "base_download_path": "/path/to/youtube/downloads",
+  "cookies_file": "/path/to/yt-cookies.txt"
+}
