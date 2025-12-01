@@ -57,6 +57,9 @@ GLOBAL_RUNSTATE = None           # SimpleNamespace(cancelled=bool) set by GUI
 FAILED_VIDEO_IDS: Set[str] = set()  # IDs that failed in last download run
 PLAYLIST_INFO_CACHE: Dict[str, dict] = {} # Cache for playlist info extracted via yt-dlp.extract_info()
 
+# NEW global to let hooks know which playlist we're processing
+GLOBAL_CURRENT_PLAYLIST_URL: Optional[str] = None
+
 
 # ====== HELPERS ======
 
@@ -97,8 +100,11 @@ def _get_playlist_info(url: str, force_refresh: bool = False) -> dict:
         "skip_download": True,
         "extract_flat": "in_playlist",
     }
-    if USE_BROWSER_COOKIES:
+    if USE_BROWSER_COOKIES and _check_browser_cookies_available():
         ydl_opts_info["cookies_from_browser"] = (BROWSER_NAME,)
+    elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
+        # yt-dlp Python API expects "cookiefile" for a cookies.txt path
+        ydl_opts_info["cookiefile"] = COOKIES_FILE
     if USER_AGENT:
         ydl_opts_info["user_agent"] = USER_AGENT
 
@@ -216,13 +222,51 @@ def is_entry_unavailable(e: dict, excluded_ids: Set[str] | None = None) -> bool:
 
 # ====== YT-DLP HOOKS ======
 
+def _load_gui_config() -> dict:
+    cfg_path = os.path.join(os.path.dirname(__file__), "yt_playlist_gui_config.json")
+    if not os.path.isfile(cfg_path):
+        return {}
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[WARN] Could not read GUI config: {e}")
+        return {}
+
+def _save_gui_config(cfg: dict) -> None:
+    cfg_path = os.path.join(os.path.dirname(__file__), "yt_playlist_gui_config.json")
+    try:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[WARN] Could not save GUI config: {e}")
+
+def _add_excluded_id_to_gui_config(playlist_url: str, vid: str) -> None:
+    """Append vid to the playlist's excluded_ids in the GUI config (if not present)."""
+    if not playlist_url or not vid:
+        return
+    cfg = _load_gui_config()
+    playlists = cfg.get("playlists") or []
+    updated = False
+    for p in playlists:
+        if p.get("url") == playlist_url:
+            excluded = p.get("excluded_ids") or []
+            if vid not in excluded:
+                excluded.append(vid)
+                p["excluded_ids"] = excluded
+                p["unavailable_count"] = int(p.get("unavailable_count", 0)) + 1
+                updated = True
+            break
+    if updated:
+        _save_gui_config(cfg)
+
 def _progress_hook_archive(d):
     """
     Track:
       - items skipped because already downloaded / in archive
-      - items that error out (FAILED_VIDEO_IDS)
+      - items that error out (FAILED_VIDEO_IDS) and persist to GUI config
     """
-    global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS
+    global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL
 
     status = d.get("status")
     info = d.get("info_dict") or {}
@@ -246,7 +290,13 @@ def _progress_hook_archive(d):
         msg = str(err)
         if vid:
             FAILED_VIDEO_IDS.add(vid)
-        print(f"[WARN] Download failed for {vid}: {msg}")
+            print(f"[WARN] Download failed for {vid}: {msg}")
+            # persist immediately into GUI config excluded_ids so next runs skip it
+            try:
+                if GLOBAL_CURRENT_PLAYLIST_URL:
+                    _add_excluded_id_to_gui_config(GLOBAL_CURRENT_PLAYLIST_URL, vid)
+            except Exception as e:
+                print(f"[WARN] Could not persist failed id {vid}: {e}")
 
 
 def _slow_down_hook(d):
@@ -380,142 +430,169 @@ def _slow_down_hook(d):
 
 #     return FAILED_VIDEO_IDS
 
-def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True) -> Set[str]:
+def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, excluded_ids: Set[str] | None = None) -> Set[str]:
     """
     MODE 2:
       - Downloads bestvideo+bestaudio/best for a playlist/single video.
       - Uses download_archive to only get new videos.
       - If as_mp3 is True, extracts MP3 into audio subfolder.
+      - excluded_ids: set of video IDs to skip (from GUI config)
     Returns:
       FAILED_VIDEO_IDS: set of failed/unavailable IDs for this run.
     """
-    global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS
+    global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL
     SKIPPED_VIDEOS_ARCHIVE = []
     FAILED_VIDEO_IDS = set()
+    GLOBAL_CURRENT_PLAYLIST_URL = url  # set for hooks
 
-    print("Fetching playlist information...")
+    if excluded_ids is None:
+        excluded_ids = set()
+
     try:
+        print("Fetching playlist information...")
         title = _get_playlist_info_title(url)
-    except Exception as e:
-        print(f"Could not fetch playlist info ({e}), using generic name.")
-        title = "playlist"
 
-    playlist_folder, archive_file, audio_folder = _build_playlist_paths(title)
+        playlist_folder, archive_file, audio_folder = _build_playlist_paths(title)
 
-    print(f"\nBase path      : {BASE_DOWNLOAD_PATH}")
-    print(f"Playlist title : {title}")
-    print(f"Playlist folder: {playlist_folder}")
-    print(f"Archive file   : {archive_file}")
-    print(f"Audio folder   : {audio_folder}")
+        print(f"\nBase path      : {BASE_DOWNLOAD_PATH}")
+        print(f"Playlist title : {title}")
+        print(f"Playlist folder: {playlist_folder}")
+        print(f"Archive file   : {archive_file}")
+        print(f"Audio folder   : {audio_folder}")
 
-    # Get filtered video URLs (skip unavailable)
-    entries = []
-    try:
-        entries = _get_playlist_entries(url, playlist_folder)
-    except Exception as e:
-        print(f"Warning: failed to enumerate playlist entries ({e}), will fall back to downloading the playlist URL.")
+        # Get filtered video URLs (skip unavailable)
+        entries = []
+        try:
+            entries = _get_playlist_entries(url, playlist_folder)
+        except Exception as e:
+            print(f"Warning: failed to enumerate playlist entries ({e}), will fall back to downloading the playlist URL.")
 
-    video_urls: List[str] = []
-    if entries:
-        print(f"Found {len(entries)} entries; filtering unavailable/private items...")
-        for e in entries:
-            # Check cancellation during enumeration
-            if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-                print("\n⚠️ Cancellation detected during entry filtering. Stopping...")
-                return FAILED_VIDEO_IDS
-            
-            if not e:
-                continue
-            if is_entry_unavailable(e):
-                vid = e.get("id") or e.get("url") or "unknown"
-                print(f"  Skipping unavailable/private: {e.get('title') or vid} [{vid}]")
-                if e.get("id"):
-                    FAILED_VIDEO_IDS.add(e.get("id"))
-                continue
-
-            vid = e.get("id") or e.get("url")
-            if not vid:
-                continue
-            if str(vid).startswith("http"):
-                video_urls.append(str(vid))
-            else:
-                video_urls.append(f"https://www.youtube.com/watch?v={vid}")
-
-    if not video_urls and entries:
-        print("No available videos to download after filtering; nothing to do.")
-        return FAILED_VIDEO_IDS
-
-    common_opts = {
-        "outtmpl": os.path.join(playlist_folder, "%(title)s.%(ext)s"),
-        "ignoreerrors": True,
-        "download_archive": archive_file,
-        "quiet": False,
-        "no_warnings": True,
-        "progress_hooks": [_progress_hook_archive, _slow_down_hook],
-    }
-
-    if USE_BROWSER_COOKIES: #and _check_browser_cookies_available():
-        print(f"✓ Loading cookies from {BROWSER_NAME} (browser is running)")
-        common_opts["cookies_from_browser"] = (BROWSER_NAME,)
-    elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
-        print(f"✓ Loading cookies from file: {COOKIES_FILE}")
-        common_opts["cookies"] = COOKIES_FILE
-    else:
-        print("⚠️  Warning: No valid cookies found. Age-restricted videos will likely fail.")
-
-    if USER_AGENT:
-        common_opts["user_agent"] = USER_AGENT
-    common_opts.update(_base_speed_opts())
-
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
-    }
-    ydl_opts.update(common_opts)
-
-    print("\nStarting download...")
-    
-    # Download videos one by one so we can check cancellation between each
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            urls_to_download = video_urls if video_urls else [url]
-            
-            for idx, video_url in enumerate(urls_to_download):
-                # Check cancellation BEFORE each video
+        video_urls: List[str] = []
+        if entries:
+            print(f"Found {len(entries)} entries; filtering unavailable/private items...")
+            for e in entries:
+                # Check cancellation during enumeration
                 if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-                    print(f"\n⚠️ Cancellation detected at video {idx+1}/{len(urls_to_download)}. Stopping download...")
-                    break
+                    print("\n⚠️ Cancellation detected during entry filtering. Stopping...")
+                    return FAILED_VIDEO_IDS
                 
-                try:
-                    print(f"\n[{idx+1}/{len(urls_to_download)}] Downloading: {video_url}")
-                    ydl.download([video_url])
-                except KeyboardInterrupt:
-                    print(f"\n⚠️ Download interrupted by user at video {idx+1}/{len(urls_to_download)}.")
-                    break
-                except Exception as e:
-                    print(f"Error downloading {video_url}: {e}")
+                if not e:
                     continue
-    except Exception as e:
-        print(f"\n❌ Download failed: {e}")
+                
+                vid = e.get("id") or e.get("url") or "unknown"
+                
+                # Skip if in excluded_ids (from GUI config)
+                if vid in excluded_ids:
+                    print(f"  Skipping (excluded): {e.get('title') or vid} [{vid}]")
+                    FAILED_VIDEO_IDS.add(vid)
+                    continue
+                
+                # Skip if detected as unavailable/private by heuristic
+                if is_entry_unavailable(e, excluded_ids=excluded_ids):
+                    print(f"  Skipping unavailable/private: {e.get('title') or vid} [{vid}]")
+                    if e.get("id"):
+                        FAILED_VIDEO_IDS.add(e.get("id"))
+                    continue
 
-    if SKIPPED_VIDEOS_ARCHIVE:
-        print("\nVideos skipped (already in archive or on disk):")
-        for v in SKIPPED_VIDEOS_ARCHIVE:
-            print(f"  - {v.get('title') or 'Unknown'} [{v.get('id')}] — {v['reason']}")
+                if not vid:
+                    continue
+                if str(vid).startswith("http"):
+                    video_urls.append(str(vid))
+                else:
+                    video_urls.append(f"https://www.youtube.com/watch?v={vid}")
 
-    if as_mp3:
-        # Check if cancelled before extracting
-        if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-            print("\n⚠️ Cancellation requested. Skipping audio extraction.")
+        if not video_urls and entries:
+            print("No available videos to download after filtering; nothing to do.")
+            return FAILED_VIDEO_IDS
+
+        common_opts = {
+            "outtmpl": os.path.join(playlist_folder, "%(title)s.%(ext)s"),
+            "ignoreerrors": False,  # Change this to False
+            "download_archive": archive_file,
+            "quiet": False,
+            "no_warnings": True,
+            "progress_hooks": [_progress_hook_archive, _slow_down_hook],
+        }
+
+        if USE_BROWSER_COOKIES: #and _check_browser_cookies_available():
+            print(f"✓ Loading cookies from {BROWSER_NAME} (browser is running)")
+            common_opts["cookies_from_browser"] = (BROWSER_NAME,)
+        elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
+            print(f"✓ Loading cookies from file: {COOKIES_FILE}")
+            # pass as cookiefile so yt-dlp uses it
+            common_opts["cookiefile"] = COOKIES_FILE
         else:
-            print("\nExtracting audio to MP3 from downloaded videos...")
-            try:
-                extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
-            except KeyboardInterrupt:
-                print("\n⚠️ Audio extraction cancelled by user.")
+            print("⚠️  Warning: No valid cookies found. Age-restricted videos will likely fail.")
 
-    print(f"\nDone. Video files in:\n{playlist_folder}")
-    print(f"MP3 files in:\n{audio_folder}")
+        if USER_AGENT:
+            common_opts["user_agent"] = USER_AGENT
+        common_opts.update(_base_speed_opts())
+
+        ydl_opts = {
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+        }
+        ydl_opts.update(common_opts)
+
+        print("\nStarting download...")
+        
+        # Download videos one by one so we can check cancellation between each
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                urls_to_download = video_urls if video_urls else [url]
+                
+                for idx, video_url in enumerate(urls_to_download):
+                    # Check cancellation BEFORE each video
+                    if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
+                        print(f"\n⚠️ Cancellation detected at video {idx+1}/{len(urls_to_download)}. Stopping download...")
+                        break
+                    
+                    try:
+                        print(f"\n[{idx+1}/{len(urls_to_download)}] Downloading: {video_url}")
+                        ydl.download([video_url])
+                    except Exception as e:
+                        # Extract video ID and log failure
+                        vid = video_url.split("v=")[-1] if "v=" in video_url else video_url
+                        print(f"[WARN] Download failed for {vid}: {str(e)}")
+                        FAILED_VIDEO_IDS.add(vid)
+                        
+                        # Persist to GUI config immediately
+                        try:
+                            if GLOBAL_CURRENT_PLAYLIST_URL:
+                                _add_excluded_id_to_gui_config(GLOBAL_CURRENT_PLAYLIST_URL, vid)
+                        except Exception as persist_err:
+                            print(f"[WARN] Could not persist failed id {vid}: {persist_err}")
+                        continue
+        except Exception as e:
+            print(f"\n❌ Download run failed: {e}")
+
+        if SKIPPED_VIDEOS_ARCHIVE:
+            print("\nVideos skipped (already in archive or on disk):")
+            for v in SKIPPED_VIDEOS_ARCHIVE:
+                print(f"  - {v.get('title') or 'Unknown'} [{v.get('id')}] — {v['reason']}")
+
+        if as_mp3:
+            # Check if cancelled before extracting
+            if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
+                print("\n⚠️ Cancellation requested. Skipping audio extraction.")
+            else:
+                print("\nExtracting audio to MP3 from downloaded videos...")
+                try:
+                    extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
+                except KeyboardInterrupt:
+                    print("\n⚠️ Audio extraction cancelled by user.")
+
+        # after download/except/cleanup, merge failed ids into GUI config as final step:
+        if FAILED_VIDEO_IDS:
+            try:
+                # persist all failed ids (idempotent)
+                for vid in list(FAILED_VIDEO_IDS):
+                    _add_excluded_id_to_gui_config(url, vid)
+            except Exception as e:
+                print(f"[WARN] Could not merge failed IDs into GUI config: {e}")
+
+    finally:
+        GLOBAL_CURRENT_PLAYLIST_URL = None
 
     return FAILED_VIDEO_IDS
 

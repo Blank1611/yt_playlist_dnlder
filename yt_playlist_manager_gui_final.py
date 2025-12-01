@@ -528,40 +528,64 @@ class PlaylistManagerApp(tk.Tk):
         def progress_cb(total, current_index):
             self.total_items = total
             self.current_item_index = current_index
+            if self.cancel_requested or runstate.cancelled:
+                raise KeyboardInterrupt("User requested cancellation")
 
         tools.GLOBAL_PROGRESS_CALLBACK = progress_cb
         tools.GLOBAL_RUNSTATE = runstate
 
         self.cancel_requested = False
-
         failed_ids = set()
 
         try:
+            # Get excluded_ids from playlist config
+            playlist_cfg = self._get_playlist_config(url)
+            excluded_ids = set(playlist_cfg.get("excluded_ids", [])) if playlist_cfg else set()
+            
             if mode == "download_extract":
-                failed_ids = tools.download_playlist_with_video_and_audio(url, as_mp3=True)
-                self._merge_failed_ids_into_playlist(index, failed_ids)
-                self._update_playlist_stats_from_disk(index, url, title, updated_download=True)
+                failed_ids = tools.download_playlist_with_video_and_audio(url, as_mp3=True, excluded_ids=excluded_ids)
+                
+                # Check if cancelled before continuing
+                if not runstate.cancelled and not self.cancel_requested:
+                    self._merge_failed_ids_into_playlist(index, failed_ids)
+                    self._update_playlist_stats_from_disk(index, url, title, updated_download=True)
+                else:
+                    print("\n❌ Download cancelled by user.\n")
+                    
             elif mode == "extract_only":
                 tools.extract_audio_for_existing_playlist(title)
-                self._update_playlist_stats_from_disk(index, url, title, updated_extract=True)
+                
+                # Check if cancelled before updating stats
+                if not runstate.cancelled and not self.cancel_requested:
+                    self._update_playlist_stats_from_disk(index, url, title, updated_extract=True)
+                else:
+                    print("\n❌ Extraction cancelled by user.\n")
             else:
                 print(f"Unknown mode: {mode}")
+                
+        except KeyboardInterrupt as e:
+            print(f"\n❌ Task cancelled: {e}\n")
         except Exception as e:
-            print(f"\nERROR in worker: {e}")
+            print(f"\n❌ ERROR in worker: {e}\n")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            self.log_queue.put("\nTask finished.\n")
+            self.log_queue.put("\n✓ Task ended.\n")
             self.is_working = False
+            tools.GLOBAL_RUNSTATE = None
             self.progress_var.set(100.0)
             self._refresh_playlist_table()
 
     def _merge_failed_ids_into_playlist(self, index: int, failed_ids: set[str]):
         if not failed_ids:
+            print(f"DEBUG: No failed IDs to merge")
             return
         pl = self.config_data["playlists"][index]
         existing = set(pl.get("excluded_ids", []))
+        print(f"DEBUG: Existing excluded_ids: {existing}")
+        print(f"DEBUG: New failed_ids: {failed_ids}")
         new_set = sorted(existing.union(failed_ids))
+        print(f"DEBUG: Final excluded_ids: {new_set}")
         pl["excluded_ids"] = new_set
         save_config(self.config_data)
         self._append_log(
@@ -628,6 +652,13 @@ class PlaylistManagerApp(tk.Tk):
                 rs.cancelled = True
 
         self.after(100, self._poll_log_queue)
+
+    def _get_playlist_config(self, url: str) -> dict | None:
+        """Get playlist config from config_data by URL."""
+        for playlist in self.config_data.get("playlists", []):
+            if playlist.get("url") == url:
+                return playlist
+        return None
 
 
 if __name__ == "__main__":
