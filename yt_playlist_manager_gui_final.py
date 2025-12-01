@@ -21,6 +21,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 from datetime import datetime
 from glob import glob
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from yt_dlp import YoutubeDL
 import yt_playlist_audio_tools as tools  # helper module
@@ -28,20 +29,133 @@ import yt_playlist_audio_tools as tools  # helper module
 
 # ---------- LOGGING HELPERS ----------
 
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+# STARTUP_LOG will be set dynamically based on base_path from config
+# Initially None until config is loaded
+STARTUP_LOG = None
 
-STARTUP_LOG = os.path.join(LOG_DIR, "app_startup.log")
+
+def get_startup_log_path(base_path: str) -> str:
+    """Get the startup log path in the base download path."""
+    logs_dir = get_logs_base_dir(base_path)
+    return os.path.join(logs_dir, "app_startup.log")
+
+
+def get_logs_base_dir(base_path: str) -> str:
+    """Get the logs directory in the base download path."""
+    logs_dir = os.path.join(base_path, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    return logs_dir
+
+
+def get_playlist_log_path(base_path: str, playlist_title: str) -> str:
+    """Get the log file path for a specific playlist."""
+    logs_dir = get_logs_base_dir(base_path)
+    safe_title = sanitize_for_filename(playlist_title)
+    playlist_log_dir = os.path.join(logs_dir, safe_title)
+    os.makedirs(playlist_log_dir, exist_ok=True)
+    return os.path.join(playlist_log_dir, f"{safe_title}.log")
+
+# Log rotation settings (can be overridden by config)
+MAX_LOG_LINES = 5000  # Rotate after 5000 lines
+MAX_LOG_SIZE_MB = 10  # Rotate after 10 MB
+
+
+def _load_log_rotation_settings():
+    """Load log rotation settings from config if available."""
+    global MAX_LOG_LINES, MAX_LOG_SIZE_MB
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                MAX_LOG_LINES = config.get("max_log_lines", MAX_LOG_LINES)
+                MAX_LOG_SIZE_MB = config.get("max_log_size_mb", MAX_LOG_SIZE_MB)
+    except Exception:
+        pass  # Use defaults if config can't be loaded
+
+
+_load_log_rotation_settings()
 
 
 def sanitize_for_filename(name: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in name).strip("_") or "playlist"
 
 
-def write_startup_log(message: str):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(STARTUP_LOG, "a", encoding="utf-8") as f:
-        f.write(f"[{ts}] {message}")
+def _rotate_log_if_needed(log_path: str) -> None:
+    """
+    Rotate log file if it exceeds size or line limits.
+    Renamed format: basename_YYYYMMDD_revision.log
+    """
+    if not os.path.exists(log_path):
+        return
+    
+    # Check file size
+    file_size_mb = os.path.getsize(log_path) / (1024 * 1024)
+    
+    # Check line count
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            line_count = sum(1 for _ in f)
+    except Exception:
+        line_count = 0
+    
+    # Rotate if exceeds limits
+    if file_size_mb > MAX_LOG_SIZE_MB or line_count > MAX_LOG_LINES:
+        # Get file creation/modification time
+        file_time = datetime.fromtimestamp(os.path.getmtime(log_path))
+        date_str = file_time.strftime("%Y%m%d")
+        
+        # Get base name without extension
+        base_dir = os.path.dirname(log_path)
+        base_name = os.path.splitext(os.path.basename(log_path))[0]
+        
+        # Find next available revision number for today
+        revision = 1
+        while True:
+            new_name = f"{base_name}_{date_str}_{revision:02d}.log"
+            new_path = os.path.join(base_dir, new_name)
+            if not os.path.exists(new_path):
+                break
+            revision += 1
+        
+        # Rename old log
+        try:
+            os.rename(log_path, new_path)
+            print(f"Rotated log: {os.path.basename(log_path)} -> {os.path.basename(new_path)}")
+        except Exception as e:
+            print(f"Warning: Could not rotate log {log_path}: {e}")
+
+
+def write_startup_log(message: str, base_path: str = None):
+    """Write to startup log. If base_path not provided, tries to load from config."""
+    global STARTUP_LOG
+    
+    try:
+        # If base_path not provided, try to load from config
+        if base_path is None:
+            if STARTUP_LOG is None:
+                # Try to get base_path from config
+                if os.path.exists(CONFIG_FILE):
+                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                        base_path = config.get("base_path")
+                
+                if base_path:
+                    STARTUP_LOG = get_startup_log_path(base_path)
+                else:
+                    # Fallback to local logs if no config
+                    local_log_dir = "logs"
+                    os.makedirs(local_log_dir, exist_ok=True)
+                    STARTUP_LOG = os.path.join(local_log_dir, "app_startup.log")
+        else:
+            STARTUP_LOG = get_startup_log_path(base_path)
+        
+        _rotate_log_if_needed(STARTUP_LOG)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(STARTUP_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {message}")
+    except Exception as e:
+        # Print to console if logging fails
+        print(f"Warning: Could not write to startup log: {e}")
 
 
 class TeeLogger:
@@ -49,6 +163,8 @@ class TeeLogger:
         self.q = q
         self.logfile_path = logfile_path
         os.makedirs(os.path.dirname(self.logfile_path), exist_ok=True)
+        # Rotate log before starting new operation
+        _rotate_log_if_needed(self.logfile_path)
 
     def write(self, s):
         if not s:
@@ -158,7 +274,9 @@ class PlaylistManagerApp(tk.Tk):
         self.current_item_index = 0
         self.cancel_requested = False
 
-        write_startup_log("=== App startup ===\n")
+        # Initialize startup log with base_path from config
+        base_path = self.config_data.get("base_path")
+        write_startup_log("=== App startup ===\n", base_path)
         self._refresh_all_playlist_stats_from_disk()
 
         self._build_ui()
@@ -317,54 +435,112 @@ class PlaylistManagerApp(tk.Tk):
 
     # ---------- STARTUP STATS ----------
 
-    def _refresh_all_playlist_stats_from_disk(self):
-        base_path = self.config_data["base_path"]
-        changed = False
-        for idx, pl in enumerate(self.config_data["playlists"]):
-            url = pl.get("url", "")
-            title = pl.get("title", "")
-            if not url or not title:
-                continue
-
-            # Ensure folder structure exists for existing playlists
-            try:
-                write_startup_log(f"Checking folder structure for: {title}\n")
-                playlist_folder, archive_file, audio_folder = tools._build_playlist_paths(title, create_folders=True)
+    def _process_single_playlist_startup(self, pl: dict, base_path: str) -> dict:
+        """Process a single playlist during startup (for parallel execution)."""
+        import threading
+        
+        thread_id = threading.current_thread().name
+        url = pl.get("url", "")
+        title = pl.get("title", "")
+        
+        if not url or not title:
+            return pl
+        
+        log_messages = []
+        
+        # Ensure folder structure exists for existing playlists
+        try:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] Checking folder structure")
+            playlist_folder, archive_file, audio_folder = tools._build_playlist_paths(title, create_folders=True)
+            
+            # Check if playlist_info.json exists in snapshot directory
+            snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+            info_file = os.path.join(snapshot_dir, "playlist_info.json")
+            
+            if not os.path.exists(info_file):
+                log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] Creating missing playlist_info.json")
                 
-                # Check if playlist_info.json exists in snapshot directory
-                snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-                info_file = os.path.join(snapshot_dir, "playlist_info.json")
-                
-                if not os.path.exists(info_file):
-                    write_startup_log(f"  Creating missing playlist_info.json for: {title}\n")
+                # Try to save playlist_info.json if we can fetch it
+                try:
+                    entries = tools._get_playlist_entries(url, playlist_folder)
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Saved playlist_info.json with {len(entries)} entries")
+                except Exception as e:
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ⚠️  Could not save playlist_info.json: {e}")
+            else:
+                log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ playlist_info.json exists")
                     
-                    # Try to save playlist_info.json if we can fetch it
-                    try:
-                        entries = tools._get_playlist_entries(url, playlist_folder)
-                        write_startup_log(f"  Saved playlist_info.json with {len(entries)} entries\n")
-                    except Exception as e:
-                        write_startup_log(f"  Warning: Could not save playlist_info.json: {e}\n")
-                else:
-                    write_startup_log(f"  playlist_info.json already exists\n")
-                        
-            except Exception as e:
-                write_startup_log(f"  Warning: Could not create folder structure for {title}: {e}\n")
+        except Exception as e:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ⚠️  Could not create folder structure: {e}")
 
-            excluded_ids = pl.get("excluded_ids", [])
-            write_startup_log(f"Refreshing stats for: {title} ({url})\n")
+        # Get stats
+        excluded_ids = pl.get("excluded_ids", [])
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] Refreshing stats...")
+        
+        try:
             local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, excluded_ids)
             pl["local_count"] = local_count
             pl["playlist_count"] = avail_count
             pl["unavailable_count"] = unavail_count
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Stats: {local_count} local, {avail_count} available, {unavail_count} unavailable")
+        except Exception as e:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ⚠️  Error getting stats: {e}")
+            pl["local_count"] = 0
+            pl["playlist_count"] = 0
+            pl["unavailable_count"] = 0
 
-            if not pl.get("last_download_ist") or not pl.get("last_extract_ist"):
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                pl.setdefault("last_download_ist", now_str)
-                pl.setdefault("last_extract_ist", now_str)
-            changed = True
+        if not pl.get("last_download_ist") or not pl.get("last_extract_ist"):
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            pl.setdefault("last_download_ist", now_str)
+            pl.setdefault("last_extract_ist", now_str)
+        
+        # Write all log messages for this playlist
+        for msg in log_messages:
+            write_startup_log(msg + "\n")
+        
+        return pl
 
-        if changed:
-            save_config(self.config_data)
+    def _refresh_all_playlist_stats_from_disk(self):
+        base_path = self.config_data["base_path"]
+        playlists = self.config_data["playlists"]
+        
+        if not playlists:
+            return
+        
+        write_startup_log(f"Starting parallel refresh of {len(playlists)} playlists...\n")
+        start_time = datetime.now()
+        
+        # Use ThreadPoolExecutor for parallel processing
+        # Limit to 5 concurrent threads to avoid overwhelming YouTube API
+        max_workers = min(5, len(playlists))
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all playlist processing tasks
+            future_to_idx = {
+                executor.submit(self._process_single_playlist_startup, pl, base_path): idx
+                for idx, pl in enumerate(playlists)
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    updated_pl = future.result()
+                    self.config_data["playlists"][idx] = updated_pl
+                except Exception as e:
+                    write_startup_log(f"⚠️  Error processing playlist {playlists[idx].get('title', 'Unknown')}: {e}\n")
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        write_startup_log(f"\n✓ Completed refresh of {len(playlists)} playlists in {duration:.1f} seconds\n")
+        
+        save_config(self.config_data)
 
     # ---------- PLAYLIST MANAGEMENT ----------
 
@@ -600,8 +776,8 @@ class PlaylistManagerApp(tk.Tk):
     def _run_mode_worker(self, index: int, mode: str, url: str, title: str):
         import sys
 
-        safe_name = sanitize_for_filename(title)
-        playlist_log = os.path.join(LOG_DIR, f"{safe_name}.log")
+        base_path = self.config_data["base_path"]
+        playlist_log = get_playlist_log_path(base_path, title)
 
         old_stdout = sys.stdout
         old_stderr = sys.stderr

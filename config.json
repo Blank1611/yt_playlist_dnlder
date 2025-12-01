@@ -1,4 +1,10 @@
 {
-  "base_download_path": "/path/to/youtube/downloads",
-  "cookies_file": "/path/to/yt-cookies.txt"
+  "base_download_path": "E:\\2tbhdd\\songs\\syst\\New folder\\youtube",
+  "cookies_file": "E:\\2tbhdd\\songs\\syst\\New folder\\youtube\\yt-cookies.txt",
+  "use_browser_cookies": false,
+  "browser_name": "chrome",
+  "audio_extract_mode": "copy",
+  "max_extraction_workers": 4,
+  "max_log_lines": 5000,
+  "max_log_size_mb": 10
 }

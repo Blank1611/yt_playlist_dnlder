@@ -21,6 +21,7 @@ import shutil
 import glob
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import ExtractorError
@@ -44,6 +45,19 @@ BROWSER_NAME = CONFIG.get("browser_name", "chrome")  # chrome, firefox, edge, sa
 COOKIES_FILE = CONFIG.get("cookies_file")
 USER_AGENT = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36"
 CONCURRENT_FRAGMENTS = 4
+
+# Audio extraction settings
+# Options:
+#   "copy" - Copy original audio codec (no re-encoding, best quality, preserves original format)
+#   "mp3_best" - MP3 VBR quality 0 (~245kbps, best MP3 quality)
+#   "mp3_high" - MP3 VBR quality 2 (~190kbps, high quality, smaller files)
+#   "opus" - OPUS codec (YouTube's native format, excellent quality at lower bitrates)
+AUDIO_EXTRACT_MODE = CONFIG.get("audio_extract_mode", "mp3_best")
+
+# Parallel extraction settings
+# Number of concurrent ffmpeg processes for audio extraction
+# Recommended: Number of CPU cores (default: 4)
+MAX_EXTRACTION_WORKERS = CONFIG.get("max_extraction_workers", 4)
 
 
 # ====== GLOBALS ======
@@ -725,6 +739,85 @@ def extract_audio_for_existing_playlist(title: str):
     extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
 
 
+def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, idx: int, total: int) -> Dict:
+    """Extract audio from a single video file. Returns result dict."""
+    from subprocess import run, DEVNULL, CalledProcessError
+    import threading
+    
+    thread_id = threading.current_thread().name
+    base_name = os.path.splitext(os.path.basename(vid_path))[0]
+    
+    # Determine output file extension based on mode
+    if AUDIO_EXTRACT_MODE == "copy":
+        audio_ext = ".m4a"  # Default, will be determined by ffmpeg
+    elif AUDIO_EXTRACT_MODE == "opus":
+        audio_ext = ".opus"
+    else:  # mp3_best or mp3_high
+        audio_ext = ".mp3"
+    
+    audio_path = os.path.join(audio_folder, base_name + audio_ext)
+    
+    # Check if already exists
+    if os.path.isfile(audio_path):
+        return {
+            "status": "skipped",
+            "video": vid_path,
+            "audio": audio_path,
+            "reason": "already exists",
+            "thread_id": thread_id
+        }
+    
+    # Build ffmpeg command based on extraction mode
+    if AUDIO_EXTRACT_MODE == "copy":
+        cmd = [
+            ffmpeg_path, "-y", "-i", vid_path,
+            "-vn", "-acodec", "copy", audio_path,
+        ]
+        mode_label = "copy"
+    elif AUDIO_EXTRACT_MODE == "opus":
+        cmd = [
+            ffmpeg_path, "-y", "-i", vid_path,
+            "-vn", "-acodec", "libopus", "-b:a", "128k", audio_path,
+        ]
+        mode_label = "OPUS"
+    elif AUDIO_EXTRACT_MODE == "mp3_best":
+        cmd = [
+            ffmpeg_path, "-y", "-i", vid_path,
+            "-vn", "-acodec", "libmp3lame", "-q:a", "0", audio_path,
+        ]
+        mode_label = "MP3 best"
+    else:  # mp3_high
+        cmd = [
+            ffmpeg_path, "-y", "-i", vid_path,
+            "-vn", "-acodec", "libmp3lame", "-q:a", "2", audio_path,
+        ]
+        mode_label = "MP3 high"
+    
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] Extracting ({mode_label}): {os.path.basename(vid_path)}")
+    
+    try:
+        start = time.time()
+        run(cmd, stdout=DEVNULL, stderr=DEVNULL, check=True)
+        duration = time.time() - start
+        print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ✓ Completed in {duration:.1f}s: {os.path.basename(audio_path)}")
+        return {
+            "status": "success",
+            "video": vid_path,
+            "audio": audio_path,
+            "thread_id": thread_id,
+            "duration": duration
+        }
+    except CalledProcessError as e:
+        print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ⚠️  Failed: {os.path.basename(vid_path)} - {e}")
+        return {
+            "status": "failed",
+            "video": vid_path,
+            "audio": audio_path,
+            "error": str(e),
+            "thread_id": thread_id
+        }
+
 def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folder: str):
     global SKIPPED_AUDIO_EXISTING, EXTRACTED_AUDIO
     SKIPPED_AUDIO_EXISTING = []
@@ -741,7 +834,9 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
 
     print(f"\nUsing FFmpeg at: {ffmpeg_path}")
     print(f"Scanning for video files in: {playlist_folder}")
-    print(f"Writing MP3s to: {audio_folder}\n")
+    print(f"Audio output folder: {audio_folder}")
+    print(f"Extraction mode: {AUDIO_EXTRACT_MODE}")
+    print(f"Parallel workers: {MAX_EXTRACTION_WORKERS}\n")
 
     video_exts = ("*.mp4", "*.mkv", "*.webm", "*.m4v")
     video_files: List[str] = []
@@ -752,52 +847,73 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
         print("No video files found to extract audio from.")
         return
 
-    from subprocess import run, DEVNULL, CalledProcessError
-
     total = len(video_files)
-    for idx, vid_path in enumerate(video_files, start=1):
-        if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-            print("Cancellation requested. Stopping extraction loop.")
-            break
+    print(f"Found {total} video files to process\n")
+    
+    start_time = time.time()
+    completed = 0
+    failed = 0
+    
+    # Use ThreadPoolExecutor for parallel extraction
+    with ThreadPoolExecutor(max_workers=MAX_EXTRACTION_WORKERS) as executor:
+        # Submit all extraction tasks
+        future_to_video = {
+            executor.submit(_extract_single_audio, vid_path, audio_folder, ffmpeg_path, idx, total): vid_path
+            for idx, vid_path in enumerate(video_files, start=1)
+        }
+        
+        # Process results as they complete
+        for future in as_completed(future_to_video):
+            # Check for cancellation
+            if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
+                print("\n⚠️  Cancellation requested. Stopping extraction...")
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
+            
+            vid_path = future_to_video[future]
+            try:
+                result = future.result()
+                completed += 1
+                
+                if result["status"] == "skipped":
+                    SKIPPED_AUDIO_EXISTING.append({"video": result["video"], "audio": result["audio"]})
+                elif result["status"] == "success":
+                    EXTRACTED_AUDIO.append({"video": result["video"], "audio": result["audio"]})
+                elif result["status"] == "failed":
+                    failed += 1
+                
+                # Update progress
+                if GLOBAL_PROGRESS_CALLBACK is not None:
+                    GLOBAL_PROGRESS_CALLBACK(total, completed)
+                    
+            except Exception as e:
+                print(f"  ⚠️  Unexpected error processing {os.path.basename(vid_path)}: {e}")
+                failed += 1
+    
+    end_time = time.time()
+    duration = end_time - start_time
+    
+    print("\n" + "="*60)
+    print("Audio extraction summary:")
+    print(f"  Total processed: {completed}/{total}")
+    print(f"  Newly extracted: {len(EXTRACTED_AUDIO)}")
+    print(f"  Skipped (already exist): {len(SKIPPED_AUDIO_EXISTING)}")
+    print(f"  Failed: {failed}")
+    print(f"  Time taken: {duration:.1f} seconds")
+    if len(EXTRACTED_AUDIO) > 0:
+        print(f"  Average: {duration/len(EXTRACTED_AUDIO):.1f} sec/file")
+    print("="*60)
 
-        base_name = os.path.splitext(os.path.basename(vid_path))[0]
-        mp3_path = os.path.join(audio_folder, base_name + ".mp3")
-
-        if GLOBAL_PROGRESS_CALLBACK is not None:
-            GLOBAL_PROGRESS_CALLBACK(total, idx)
-
-        if os.path.isfile(mp3_path):
-            SKIPPED_AUDIO_EXISTING.append({"video": vid_path, "audio": mp3_path})
-            continue
-
-        cmd = [
-            ffmpeg_path,
-            "-y",
-            "-i", vid_path,
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-qscale:a", "2",
-            mp3_path,
-        ]
-        print(f"Extracting: {os.path.basename(vid_path)} -> {os.path.basename(mp3_path)}")
-        try:
-            run(cmd, stdout=DEVNULL, stderr=DEVNULL, check=True)
-            EXTRACTED_AUDIO.append({"video": vid_path, "audio": mp3_path})
-        except CalledProcessError:
-            print(f"  ! ffmpeg failed for {vid_path}")
-
-        time.sleep(random.uniform(0.5, 1.5))
-
-    print("\nAudio extraction summary:")
-    print(f"  Extracted MP3s: {len(EXTRACTED_AUDIO)}")
-    print(f"  Skipped (already had MP3): {len(SKIPPED_AUDIO_EXISTING)}")
-
-    if SKIPPED_AUDIO_EXISTING:
-        print("\nSkipped because MP3 already exists:")
+    if SKIPPED_AUDIO_EXISTING and len(SKIPPED_AUDIO_EXISTING) <= 10:
+        print("\nSkipped (already exist):")
         for item in SKIPPED_AUDIO_EXISTING:
             print(f"  - {os.path.basename(item['audio'])}")
+    elif len(SKIPPED_AUDIO_EXISTING) > 10:
+        print(f"\nSkipped {len(SKIPPED_AUDIO_EXISTING)} files (already exist)")
 
-    if EXTRACTED_AUDIO:
-        print("\nNewly created MP3s:")
+    if EXTRACTED_AUDIO and len(EXTRACTED_AUDIO) <= 10:
+        print("\nNewly extracted:")
         for item in EXTRACTED_AUDIO:
             print(f"  - {os.path.basename(item['audio'])}")
+    elif len(EXTRACTED_AUDIO) > 10:
+        print(f"\nExtracted {len(EXTRACTED_AUDIO)} new audio files")
