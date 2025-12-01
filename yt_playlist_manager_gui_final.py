@@ -199,7 +199,10 @@ class PlaylistManagerApp(tk.Tk):
                    command=self._remove_selected_playlist).pack(fill=tk.X, pady=(0, 4))
 
         ttk.Button(left_frame, text="Edit exclusions for selected",
-                   command=self._edit_exclusions_dialog).pack(fill=tk.X, pady=(0, 12))
+                   command=self._edit_exclusions_dialog).pack(fill=tk.X, pady=(0, 4))
+        
+        ttk.Button(left_frame, text="Fix folder structure for all",
+                   command=self._fix_all_folder_structures).pack(fill=tk.X, pady=(0, 12))
 
         # Right: table
         right_frame = ttk.Frame(top_frame)
@@ -323,6 +326,30 @@ class PlaylistManagerApp(tk.Tk):
             if not url or not title:
                 continue
 
+            # Ensure folder structure exists for existing playlists
+            try:
+                write_startup_log(f"Checking folder structure for: {title}\n")
+                playlist_folder, archive_file, audio_folder = tools._build_playlist_paths(title, create_folders=True)
+                
+                # Check if playlist_info.json exists in snapshot directory
+                snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+                info_file = os.path.join(snapshot_dir, "playlist_info.json")
+                
+                if not os.path.exists(info_file):
+                    write_startup_log(f"  Creating missing playlist_info.json for: {title}\n")
+                    
+                    # Try to save playlist_info.json if we can fetch it
+                    try:
+                        entries = tools._get_playlist_entries(url, playlist_folder)
+                        write_startup_log(f"  Saved playlist_info.json with {len(entries)} entries\n")
+                    except Exception as e:
+                        write_startup_log(f"  Warning: Could not save playlist_info.json: {e}\n")
+                else:
+                    write_startup_log(f"  playlist_info.json already exists\n")
+                        
+            except Exception as e:
+                write_startup_log(f"  Warning: Could not create folder structure for {title}: {e}\n")
+
             excluded_ids = pl.get("excluded_ids", [])
             write_startup_log(f"Refreshing stats for: {title} ({url})\n")
             local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, excluded_ids)
@@ -354,6 +381,21 @@ class PlaylistManagerApp(tk.Tk):
             title = url
 
         base_path = self.config_data["base_path"]
+        
+        # Create playlist folder immediately
+        try:
+            playlist_folder, archive_file, audio_folder = tools._build_playlist_paths(title, create_folders=True)
+            self._append_log(f"Created playlist folder: {playlist_folder}\n")
+            
+            # Save playlist_info.json immediately
+            try:
+                entries = tools._get_playlist_entries(url, playlist_folder)
+                self._append_log(f"Saved playlist_info.json with {len(entries)} entries\n")
+            except Exception as e:
+                self._append_log(f"Warning: Could not save playlist_info.json: {e}\n")
+        except Exception as e:
+            self._append_log(f"Warning: Could not create playlist folder: {e}\n")
+        
         local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, [])
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -430,6 +472,52 @@ class PlaylistManagerApp(tk.Tk):
             f"\nUpdated exclusions for {title}.\n"
             f"Excluded IDs: {', '.join(pl['excluded_ids'])}\n"
         )
+
+    def _fix_all_folder_structures(self):
+        """Manually fix folder structures for all playlists."""
+        if not messagebox.askyesno(
+            "Fix Folder Structures",
+            "This will create missing folders and playlist_info_snapshot directories for all playlists.\n\n"
+            "Continue?"
+        ):
+            return
+        
+        self._append_log("\n=== Fixing folder structures for all playlists ===\n")
+        base_path = self.config_data["base_path"]
+        fixed_count = 0
+        
+        for pl in self.config_data["playlists"]:
+            url = pl.get("url", "")
+            title = pl.get("title", "")
+            if not url or not title:
+                continue
+            
+            try:
+                self._append_log(f"\nChecking: {title}\n")
+                
+                # Create folder structure
+                playlist_folder, archive_file, audio_folder = tools._build_playlist_paths(title, create_folders=True)
+                
+                # Check if playlist_info_snapshot exists
+                snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+                info_file = os.path.join(snapshot_dir, "playlist_info.json")
+                
+                if not os.path.exists(info_file):
+                    self._append_log(f"  Creating playlist_info_snapshot and fetching playlist info...\n")
+                    try:
+                        entries = tools._get_playlist_entries(url, playlist_folder)
+                        self._append_log(f"  ✓ Saved playlist_info.json with {len(entries)} entries\n")
+                        fixed_count += 1
+                    except Exception as e:
+                        self._append_log(f"  ⚠️  Could not fetch playlist info: {e}\n")
+                else:
+                    self._append_log(f"  ✓ Folder structure already complete\n")
+                    
+            except Exception as e:
+                self._append_log(f"  ❌ Error: {e}\n")
+        
+        self._append_log(f"\n=== Fixed {fixed_count} playlist(s) ===\n")
+        messagebox.showinfo("Complete", f"Fixed folder structures for {fixed_count} playlist(s).")
 
     # ---------- RUN MODES ----------
 

@@ -19,6 +19,7 @@ import time
 import random
 import shutil
 import glob
+from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Set
 
 from yt_dlp import YoutubeDL
@@ -60,6 +61,67 @@ PLAYLIST_INFO_CACHE: Dict[str, dict] = {} # Cache for playlist info extracted vi
 # NEW global to let hooks know which playlist we're processing
 GLOBAL_CURRENT_PLAYLIST_URL: Optional[str] = None
 
+
+# ====== CUSTOM ARCHIVE LOGIC ======
+
+def _load_custom_archive(archive_file: str) -> Set[str]:
+    """Load video IDs from our custom archive file."""
+    if not os.path.isfile(archive_file):
+        return set()
+    
+    ids = set()
+    with open(archive_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                # Extract ID from "youtube <id>" format or just "<id>"
+                parts = line.split()
+                vid_id = parts[-1] if parts else line
+                ids.add(vid_id)
+    return ids
+
+def _save_custom_archive(archive_file: str, video_ids: Set[str]):
+    """Save video IDs to our custom archive file."""
+    os.makedirs(os.path.dirname(archive_file), exist_ok=True)
+    with open(archive_file, "w", encoding="utf-8") as f:
+        f.write("# Custom archive - video IDs successfully downloaded\n")
+        for vid_id in sorted(video_ids):
+            f.write(f"youtube {vid_id}\n")
+
+def _add_to_custom_archive(archive_file: str, video_id: str):
+    """Add a single video ID to the archive file."""
+    with open(archive_file, "a", encoding="utf-8") as f:
+        f.write(f"youtube {video_id}\n")
+
+def _video_exists_on_disk(playlist_folder: str, video_id: str) -> bool:
+    """Check if a video file with the given ID exists on disk."""
+    video_exts = ("*.mp4", "*.mkv", "*.webm", "*.m4v")
+    for pattern in video_exts:
+        files = glob.glob(os.path.join(playlist_folder, pattern))
+        for file in files:
+            # Check if video ID is in filename (format: [video_id])
+            if f"[{video_id}]" in file or f"_{video_id}." in file:
+                return True
+    return False
+
+def _should_download_video(archive_file: str, playlist_folder: str, video_id: str) -> bool:
+    """
+    Determine if a video should be downloaded based on:
+    a. ID does not exist in archive.txt, OR
+    b. ID exists in archive but file not actually on disk
+    """
+    archived_ids = _load_custom_archive(archive_file)
+    
+    # Case a: Not in archive at all
+    if video_id not in archived_ids:
+        return True
+    
+    # Case b: In archive but file missing on disk
+    if not _video_exists_on_disk(playlist_folder, video_id):
+        print(f"  ⚠️  Video {video_id} in archive but missing on disk - will re-download")
+        return True
+    
+    return False
 
 # ====== HELPERS ======
 
@@ -124,12 +186,42 @@ def _get_playlist_info_title(url: str) -> str:
     info = _get_playlist_info(url)
     return info.get("title") or "playlist"
 
+def _save_playlist_info_with_versioning(playlist_folder: str, info: dict):
+    """
+    Save playlist_info.json to the playlist_info_snapshot subdirectory.
+    If file already exists, rename old file with creation date before saving new one.
+    """
+    # Create snapshot subdirectory
+    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+    os.makedirs(snapshot_dir, exist_ok=True)
+    
+    info_path = os.path.join(snapshot_dir, "playlist_info.json")
+    
+    # If file exists, rename it with its creation date
+    if os.path.isfile(info_path):
+        try:
+            # Get file creation time
+            creation_time = os.path.getctime(info_path)
+            date_str = datetime.fromtimestamp(creation_time).strftime("%Y%m%d_%H%M%S")
+            
+            # Rename old file in same directory
+            old_name = os.path.join(snapshot_dir, f"playlist_info_{date_str}.json")
+            os.rename(info_path, old_name)
+            print(f"  Archived old playlist_info.json as: {os.path.basename(old_name)}")
+        except Exception as e:
+            print(f"  Warning: Could not archive old playlist_info.json: {e}")
+    
+    # Save new file
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False, indent=2)
+    
+    print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
+
 def _get_playlist_entries(url: str, playlist_folder: str) -> List[dict]:
     """Return playlist entries (list of entry dicts), using cache when possible."""
     info = _get_playlist_info(url)
     playlist_entries = info.get("entries") or []
-    with open(os.path.join(playlist_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
-        json.dump(info, f, ensure_ascii=False, indent=2)
+    _save_playlist_info_with_versioning(playlist_folder, info)
     return playlist_entries
 
 def _check_browser_cookies_available(browser_name: str = BROWSER_NAME) -> bool:
@@ -160,14 +252,21 @@ def _check_browser_cookies_available(browser_name: str = BROWSER_NAME) -> bool:
         print(f"[WARN] Failed to inspect browser cookies: {e}")
         return False
 
-def _build_playlist_paths(title: str) -> Tuple[str, str, str]:
+def _build_playlist_paths(title: str, create_folders: bool = True) -> Tuple[str, str, str]:
+    """
+    Build paths for playlist folder, archive file, and audio folder.
+    If create_folders is True, creates the folders immediately including playlist_info_snapshot.
+    """
     safe_title = _sanitize_title(title)
     playlist_folder = os.path.join(BASE_DOWNLOAD_PATH, safe_title)
     archive_file = os.path.join(playlist_folder, "archive.txt")
     audio_folder = os.path.join(playlist_folder, safe_title)
+    snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
 
-    os.makedirs(playlist_folder, exist_ok=True)
-    os.makedirs(audio_folder, exist_ok=True)
+    if create_folders:
+        os.makedirs(playlist_folder, exist_ok=True)
+        os.makedirs(audio_folder, exist_ok=True)
+        os.makedirs(snapshot_folder, exist_ok=True)
 
     return playlist_folder, archive_file, audio_folder
 
@@ -260,13 +359,13 @@ def _add_excluded_id_to_gui_config(playlist_url: str, vid: str) -> None:
     if updated:
         _save_gui_config(cfg)
 
-def _progress_hook_archive(d):
+def _progress_hook_custom(d):
     """
-    Track:
-      - items skipped because already downloaded / in archive
-      - items that error out (FAILED_VIDEO_IDS) and persist to GUI config
+    Track download progress and errors.
+    Note: With custom archive logic, we don't rely on this for skipped videos,
+    but we still use it to catch errors reported by yt-dlp's hook system.
     """
-    global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL
+    global FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL
 
     status = d.get("status")
     info = d.get("info_dict") or {}
@@ -275,22 +374,12 @@ def _progress_hook_archive(d):
 
     vid = info.get("id")
 
-    if status == "finished":
-        downloaded = d.get("downloaded_bytes", 0) or d.get("total_bytes", 0)
-        filename = d.get("filename") or info.get("filepath") or info.get("title")
-        if not downloaded:
-            SKIPPED_VIDEOS_ARCHIVE.append({
-                "id": vid,
-                "title": info.get("title") or filename or "Unknown",
-                "reason": "already downloaded (archive/file)",
-            })
-
-    elif status == "error":
+    if status == "error":
         err = d.get("error")
         msg = str(err)
         if vid:
             FAILED_VIDEO_IDS.add(vid)
-            print(f"[WARN] Download failed for {vid}: {msg}")
+            print(f"[WARN] Download failed (hook) for {vid}: {msg}")
             # persist immediately into GUI config excluded_ids so next runs skip it
             try:
                 if GLOBAL_CURRENT_PLAYLIST_URL:
@@ -434,7 +523,9 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
     """
     MODE 2:
       - Downloads bestvideo+bestaudio/best for a playlist/single video.
-      - Uses download_archive to only get new videos.
+      - Uses CUSTOM archive logic (not yt-dlp's download_archive).
+      - Downloads only if: (a) ID not in archive.txt OR (b) ID in archive but file missing on disk
+      - After successful download, verifies file exists then updates archive.txt
       - If as_mp3 is True, extracts MP3 into audio subfolder.
       - excluded_ids: set of video IDs to skip (from GUI config)
     Returns:
@@ -452,13 +543,18 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
         print("Fetching playlist information...")
         title = _get_playlist_info_title(url)
 
-        playlist_folder, archive_file, audio_folder = _build_playlist_paths(title)
+        # Create folders immediately when playlist is added
+        playlist_folder, archive_file, audio_folder = _build_playlist_paths(title, create_folders=True)
 
         print(f"\nBase path      : {BASE_DOWNLOAD_PATH}")
         print(f"Playlist title : {title}")
         print(f"Playlist folder: {playlist_folder}")
         print(f"Archive file   : {archive_file}")
         print(f"Audio folder   : {audio_folder}")
+
+        # Load custom archive
+        archived_ids = _load_custom_archive(archive_file)
+        print(f"Loaded {len(archived_ids)} IDs from custom archive")
 
         # Get filtered video URLs (skip unavailable)
         entries = []
@@ -467,9 +563,10 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
         except Exception as e:
             print(f"Warning: failed to enumerate playlist entries ({e}), will fall back to downloading the playlist URL.")
 
-        video_urls: List[str] = []
+        videos_to_download: List[Tuple[str, str]] = []  # (video_id, video_url)
+        
         if entries:
-            print(f"Found {len(entries)} entries; filtering unavailable/private items...")
+            print(f"Found {len(entries)} entries; filtering based on custom archive logic...")
             for e in entries:
                 # Check cancellation during enumeration
                 if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
@@ -496,30 +593,44 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
 
                 if not vid:
                     continue
+                
+                # CUSTOM ARCHIVE LOGIC: Check if we should download
+                if not _should_download_video(archive_file, playlist_folder, vid):
+                    print(f"  ✓ Already downloaded: {e.get('title') or vid} [{vid}]")
+                    SKIPPED_VIDEOS_ARCHIVE.append({
+                        "id": vid,
+                        "title": e.get('title') or vid,
+                        "reason": "already in custom archive and file exists on disk",
+                    })
+                    continue
+                
+                # Add to download list
                 if str(vid).startswith("http"):
-                    video_urls.append(str(vid))
+                    video_url = str(vid)
                 else:
-                    video_urls.append(f"https://www.youtube.com/watch?v={vid}")
+                    video_url = f"https://www.youtube.com/watch?v={vid}"
+                
+                videos_to_download.append((vid, video_url))
 
-        if not video_urls and entries:
-            print("No available videos to download after filtering; nothing to do.")
+        if not videos_to_download and entries:
+            print("No new videos to download after filtering; all up to date.")
             return FAILED_VIDEO_IDS
 
+        # Prepare yt-dlp options WITHOUT download_archive (we manage it ourselves)
         common_opts = {
-            "outtmpl": os.path.join(playlist_folder, "%(title)s.%(ext)s"),
-            "ignoreerrors": False,  # Change this to False
-            "download_archive": archive_file,
+            "outtmpl": os.path.join(playlist_folder, "%(title)s [%(id)s].%(ext)s"),  # Include ID in filename
+            "ignoreerrors": False,
+            # NO download_archive - we manage it ourselves
             "quiet": False,
             "no_warnings": True,
-            "progress_hooks": [_progress_hook_archive, _slow_down_hook],
+            "progress_hooks": [_progress_hook_custom, _slow_down_hook],  # Keep hook to catch yt-dlp errors
         }
 
-        if USE_BROWSER_COOKIES: #and _check_browser_cookies_available():
+        if USE_BROWSER_COOKIES:
             print(f"✓ Loading cookies from {BROWSER_NAME} (browser is running)")
             common_opts["cookies_from_browser"] = (BROWSER_NAME,)
         elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
             print(f"✓ Loading cookies from file: {COOKIES_FILE}")
-            # pass as cookiefile so yt-dlp uses it
             common_opts["cookiefile"] = COOKIES_FILE
         else:
             print("⚠️  Warning: No valid cookies found. Age-restricted videos will likely fail.")
@@ -534,25 +645,33 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
         }
         ydl_opts.update(common_opts)
 
-        print("\nStarting download...")
+        print(f"\nStarting download of {len(videos_to_download)} new videos...")
         
-        # Download videos one by one so we can check cancellation between each
+        # Download videos one by one with custom archive management
+        successfully_downloaded = []
+        
         try:
             with YoutubeDL(ydl_opts) as ydl:
-                urls_to_download = video_urls if video_urls else [url]
-                
-                for idx, video_url in enumerate(urls_to_download):
+                for idx, (vid, video_url) in enumerate(videos_to_download, 1):
                     # Check cancellation BEFORE each video
                     if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-                        print(f"\n⚠️ Cancellation detected at video {idx+1}/{len(urls_to_download)}. Stopping download...")
+                        print(f"\n⚠️ Cancellation detected at video {idx}/{len(videos_to_download)}. Stopping download...")
                         break
                     
                     try:
-                        print(f"\n[{idx+1}/{len(urls_to_download)}] Downloading: {video_url}")
+                        print(f"\n[{idx}/{len(videos_to_download)}] Downloading: {vid}")
                         ydl.download([video_url])
+                        
+                        # VERIFY file exists on disk before adding to archive
+                        if _video_exists_on_disk(playlist_folder, vid):
+                            print(f"  ✓ Download verified, adding {vid} to archive")
+                            _add_to_custom_archive(archive_file, vid)
+                            successfully_downloaded.append(vid)
+                        else:
+                            print(f"  ⚠️  Download completed but file not found on disk for {vid}")
+                            FAILED_VIDEO_IDS.add(vid)
+                            
                     except Exception as e:
-                        # Extract video ID and log failure
-                        vid = video_url.split("v=")[-1] if "v=" in video_url else video_url
                         print(f"[WARN] Download failed for {vid}: {str(e)}")
                         FAILED_VIDEO_IDS.add(vid)
                         
@@ -563,13 +682,14 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                         except Exception as persist_err:
                             print(f"[WARN] Could not persist failed id {vid}: {persist_err}")
                         continue
+                        
         except Exception as e:
             print(f"\n❌ Download run failed: {e}")
 
+        print(f"\n✓ Successfully downloaded and archived: {len(successfully_downloaded)} videos")
+        
         if SKIPPED_VIDEOS_ARCHIVE:
-            print("\nVideos skipped (already in archive or on disk):")
-            for v in SKIPPED_VIDEOS_ARCHIVE:
-                print(f"  - {v.get('title') or 'Unknown'} [{v.get('id')}] — {v['reason']}")
+            print(f"\nVideos skipped (already downloaded): {len(SKIPPED_VIDEOS_ARCHIVE)}")
 
         if as_mp3:
             # Check if cancelled before extracting
@@ -582,10 +702,9 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 except KeyboardInterrupt:
                     print("\n⚠️ Audio extraction cancelled by user.")
 
-        # after download/except/cleanup, merge failed ids into GUI config as final step:
+        # Merge failed ids into GUI config as final step
         if FAILED_VIDEO_IDS:
             try:
-                # persist all failed ids (idempotent)
                 for vid in list(FAILED_VIDEO_IDS):
                     _add_excluded_id_to_gui_config(url, vid)
             except Exception as e:
