@@ -165,17 +165,56 @@ class TeeLogger:
         os.makedirs(os.path.dirname(self.logfile_path), exist_ok=True)
         # Rotate log before starting new operation
         _rotate_log_if_needed(self.logfile_path)
+        # Keep file handle open for better performance
+        # Use larger buffer (8KB) to reduce flush frequency
+        self.file_handle = open(self.logfile_path, "a", encoding="utf-8", buffering=8192)
+        self.write_count = 0
+        self.flush_interval = 10  # Flush every 10 writes
 
     def write(self, s):
         if not s:
             return
-        self.q.put(s)
+        
+        # Send to UI queue (non-blocking)
+        try:
+            self.q.put_nowait(s)
+        except queue.Full:
+            pass  # Drop message if queue full (prevents blocking)
+        
+        # Write to file (buffered, minimal blocking)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.logfile_path, "a", encoding="utf-8") as f:
-            f.write(f"[{ts}] {s}")
+        try:
+            self.file_handle.write(f"[{ts}] {s}")
+            self.write_count += 1
+            
+            # Flush periodically instead of every write
+            if self.write_count >= self.flush_interval:
+                self.file_handle.flush()
+                self.write_count = 0
+        except Exception as e:
+            # If write fails, try to reopen file
+            try:
+                self.file_handle.close()
+                self.file_handle = open(self.logfile_path, "a", encoding="utf-8", buffering=8192)
+                self.file_handle.write(f"[{ts}] {s}")
+            except Exception:
+                pass  # Silently fail to avoid blocking
 
     def flush(self):
-        pass
+        try:
+            if self.file_handle and not self.file_handle.closed:
+                self.file_handle.flush()
+                self.write_count = 0
+        except Exception:
+            pass
+    
+    def close(self):
+        try:
+            if self.file_handle and not self.file_handle.closed:
+                self.file_handle.flush()  # Ensure all data written
+                self.file_handle.close()
+        except Exception:
+            pass
 
 
 # ---------- CONFIG STORAGE ----------
@@ -215,8 +254,13 @@ def save_config(cfg):
 
 # ---------- PLAYLIST STATS (LOCAL / AVAILABLE / UNAVAILABLE) ----------
 
-def get_playlist_stats(base_path: str, title: str, url: str, excluded_ids: list[str]) -> tuple[int, int, int]:
-    """Compute local_count, available_count, unavailable_count for a playlist."""
+def get_playlist_stats(base_path: str, title: str, url: str, excluded_ids: list[str], force_refresh: bool = False) -> tuple[int, int, int]:
+    """
+    Compute local_count, available_count, unavailable_count for a playlist.
+    
+    If force_refresh is False and playlist_info.json was created today,
+    uses cached data instead of calling yt-dlp API.
+    """
     safe_title = tools._sanitize_title(title)
     playlist_folder = os.path.join(base_path, safe_title)
 
@@ -233,15 +277,8 @@ def get_playlist_stats(base_path: str, title: str, url: str, excluded_ids: list[
     excluded_set = set(excluded_ids or [])
 
     try:
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "extract_flat": "in_playlist",
-            "ignoreerrors": True,
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-        entries = info.get("entries") or []
+        # Try to use cached playlist info if fresh (created today)
+        entries = tools._get_playlist_entries(url, playlist_folder, force_refresh=force_refresh)
 
         for e in entries:
             if tools.is_entry_unavailable(e, excluded_set):
@@ -256,6 +293,290 @@ def get_playlist_stats(base_path: str, title: str, url: str, excluded_ids: list[
     return local_count, available_count, unavailable_count
 
 
+# ---------- EXCLUSIONS EDITOR DIALOG ----------
+
+class ExclusionsEditorDialog(tk.Toplevel):
+    """Dialog for managing excluded video IDs with titles."""
+    
+    def __init__(self, parent, playlist: dict, playlist_idx: int, config_data: dict, callback):
+        super().__init__(parent)
+        
+        self.playlist = playlist
+        self.playlist_idx = playlist_idx
+        self.config_data = config_data
+        self.callback = callback
+        self.id_to_title = {}
+        
+        self.title(f"Edit Exclusions - {playlist.get('title', 'Playlist')}")
+        self.geometry("800x600")
+        self.transient(parent)
+        
+        # Load video titles
+        self._load_video_titles()
+        
+        # Build UI
+        self._build_ui()
+        
+        # Load current exclusions
+        self._load_exclusions()
+        
+        # Make modal
+        self.grab_set()
+    
+    def _load_video_titles(self):
+        """Load video ID to title mapping from playlist_info.json."""
+        base_path = self.config_data.get("base_path", "")
+        playlist_title = self.playlist.get("title", "")
+        safe_title = tools._sanitize_title(playlist_title)
+        playlist_folder = os.path.join(base_path, safe_title)
+        
+        # Try new location first
+        info_file = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+        if not os.path.exists(info_file):
+            info_file = os.path.join(playlist_folder, "playlist_info.json")
+        
+        if os.path.exists(info_file):
+            try:
+                with open(info_file, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                    entries = info.get("entries") or []
+                    for e in entries:
+                        if e:
+                            vid = e.get("id")
+                            title = e.get("title")
+                            if vid and title:
+                                self.id_to_title[vid] = title
+            except Exception as e:
+                print(f"Error loading playlist info: {e}")
+    
+    def _build_ui(self):
+        """Build the dialog UI."""
+        # Top frame with instructions
+        top_frame = ttk.Frame(self, padding=10)
+        top_frame.pack(side=tk.TOP, fill=tk.X)
+        
+        ttk.Label(
+            top_frame,
+            text=f"Manage excluded videos for: {self.playlist.get('title', 'Playlist')}",
+            font=("TkDefaultFont", 10, "bold")
+        ).pack(anchor=tk.W)
+        
+        ttk.Label(
+            top_frame,
+            text="Excluded videos will not be downloaded. Select videos and click 'Remove' to unexclude them.",
+            foreground="gray"
+        ).pack(anchor=tk.W, pady=(5, 0))
+        
+        # Middle frame with listbox and scrollbar
+        middle_frame = ttk.Frame(self, padding=10)
+        middle_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        
+        # Listbox with scrollbar
+        list_frame = ttk.Frame(middle_frame)
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.listbox = tk.Listbox(
+            list_frame,
+            selectmode=tk.EXTENDED,
+            yscrollcommand=scrollbar.set,
+            font=("TkDefaultFont", 9)
+        )
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.listbox.yview)
+        
+        # Right frame with buttons
+        button_frame = ttk.Frame(middle_frame)
+        button_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        
+        ttk.Button(
+            button_frame,
+            text="Remove Selected",
+            command=self._remove_selected
+        ).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Add Video ID",
+            command=self._add_video_id
+        ).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Clear All",
+            command=self._clear_all
+        ).pack(fill=tk.X, pady=(0, 20))
+        
+        ttk.Label(button_frame, text="Quick Actions:", font=("TkDefaultFont", 9, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Copy Selected IDs",
+            command=self._copy_selected_ids
+        ).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Open in YouTube",
+            command=self._open_in_youtube
+        ).pack(fill=tk.X)
+        
+        # Bottom frame with stats and action buttons
+        bottom_frame = ttk.Frame(self, padding=10)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.stats_label = ttk.Label(bottom_frame, text="", foreground="gray")
+        self.stats_label.pack(side=tk.LEFT)
+        
+        ttk.Button(
+            bottom_frame,
+            text="Cancel",
+            command=self.destroy
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        
+        ttk.Button(
+            bottom_frame,
+            text="Save",
+            command=self._save_and_close
+        ).pack(side=tk.RIGHT)
+    
+    def _load_exclusions(self):
+        """Load current exclusions into listbox."""
+        self.listbox.delete(0, tk.END)
+        
+        excluded_ids = self.playlist.get("excluded_ids", [])
+        for vid in excluded_ids:
+            title = self.id_to_title.get(vid, "Unknown Title")
+            display_text = f"{title} [{vid}]"
+            self.listbox.insert(tk.END, display_text)
+        
+        self._update_stats()
+    
+    def _update_stats(self):
+        """Update the stats label."""
+        count = self.listbox.size()
+        self.stats_label.config(text=f"Excluded videos: {count}")
+    
+    def _remove_selected(self):
+        """Remove selected items from exclusion list."""
+        selected = self.listbox.curselection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select videos to remove from exclusions.")
+            return
+        
+        # Remove in reverse order to maintain indices
+        for idx in reversed(selected):
+            self.listbox.delete(idx)
+        
+        self._update_stats()
+    
+    def _add_video_id(self):
+        """Add a video ID to exclusions."""
+        vid = simpledialog.askstring(
+            "Add Video ID",
+            "Enter video ID to exclude (11 characters):",
+            parent=self
+        )
+        
+        if not vid:
+            return
+        
+        vid = vid.strip()
+        
+        # Validate video ID format
+        if len(vid) != 11:
+            messagebox.showerror("Invalid ID", "Video ID must be exactly 11 characters.")
+            return
+        
+        # Check if already in list
+        for i in range(self.listbox.size()):
+            if f"[{vid}]" in self.listbox.get(i):
+                messagebox.showinfo("Already Excluded", f"Video ID {vid} is already in the exclusion list.")
+                return
+        
+        # Add to list
+        title = self.id_to_title.get(vid, "Unknown Title")
+        display_text = f"{title} [{vid}]"
+        self.listbox.insert(tk.END, display_text)
+        
+        self._update_stats()
+    
+    def _clear_all(self):
+        """Clear all exclusions."""
+        if not messagebox.askyesno(
+            "Clear All",
+            "Remove all excluded videos? They will be available for download again.",
+            parent=self
+        ):
+            return
+        
+        self.listbox.delete(0, tk.END)
+        self._update_stats()
+    
+    def _copy_selected_ids(self):
+        """Copy selected video IDs to clipboard."""
+        selected = self.listbox.curselection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select videos to copy IDs.", parent=self)
+            return
+        
+        ids = []
+        for idx in selected:
+            text = self.listbox.get(idx)
+            # Extract ID from "[ID]" format
+            if "[" in text and "]" in text:
+                vid = text.split("[")[-1].rstrip("]")
+                ids.append(vid)
+        
+        if ids:
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(ids))
+            messagebox.showinfo("Copied", f"Copied {len(ids)} video ID(s) to clipboard.", parent=self)
+    
+    def _open_in_youtube(self):
+        """Open selected video in YouTube."""
+        selected = self.listbox.curselection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a video to open.", parent=self)
+            return
+        
+        if len(selected) > 1:
+            messagebox.showwarning("Multiple Selection", "Please select only one video to open.", parent=self)
+            return
+        
+        text = self.listbox.get(selected[0])
+        # Extract ID from "[ID]" format
+        if "[" in text and "]" in text:
+            vid = text.split("[")[-1].rstrip("]")
+            url = f"https://www.youtube.com/watch?v={vid}"
+            
+            import webbrowser
+            webbrowser.open(url)
+    
+    def _save_and_close(self):
+        """Save exclusions and close dialog."""
+        # Extract video IDs from listbox
+        excluded_ids = []
+        for i in range(self.listbox.size()):
+            text = self.listbox.get(i)
+            # Extract ID from "[ID]" format
+            if "[" in text and "]" in text:
+                vid = text.split("[")[-1].rstrip("]")
+                excluded_ids.append(vid)
+        
+        # Update playlist config
+        self.playlist["excluded_ids"] = sorted(set(excluded_ids))
+        save_config(self.config_data)
+        
+        # Call callback to refresh stats
+        if self.callback:
+            self.callback(self.playlist_idx)
+        
+        self.destroy()
+
+
 # ---------- MAIN APP ----------
 
 class PlaylistManagerApp(tk.Tk):
@@ -267,9 +588,13 @@ class PlaylistManagerApp(tk.Tk):
 
         self.config_data = load_config()
         self.log_queue = queue.Queue()
-        self.worker = None
-        self.is_working = False
-
+        
+        # Track multiple operations
+        self.download_worker = None  # Only one download at a time
+        self.extraction_workers = {}  # Multiple extractions: {playlist_title: worker_thread}
+        self.is_downloading = False  # True if any download in progress
+        self.downloading_playlist = None  # Title of playlist being downloaded
+        
         self.total_items = 0
         self.current_item_index = 0
         self.cancel_requested = False
@@ -318,6 +643,9 @@ class PlaylistManagerApp(tk.Tk):
 
         ttk.Button(left_frame, text="Edit exclusions for selected",
                    command=self._edit_exclusions_dialog).pack(fill=tk.X, pady=(0, 4))
+        
+        ttk.Button(left_frame, text="Refresh playlists (force)",
+                   command=self._force_refresh_playlists).pack(fill=tk.X, pady=(0, 4))
         
         ttk.Button(left_frame, text="Fix folder structure for all",
                    command=self._fix_all_folder_structures).pack(fill=tk.X, pady=(0, 12))
@@ -391,6 +719,10 @@ class PlaylistManagerApp(tk.Tk):
             bottom_frame, maximum=100.0, variable=self.progress_var
         )
         self.progress_bar.pack(fill=tk.X, pady=(4, 0))
+        
+        # Status label for active operations
+        self.status_label = ttk.Label(bottom_frame, text="", foreground="blue")
+        self.status_label.pack(fill=tk.X, pady=(2, 0))
 
     # ---------- CONFIG / PATHS ----------
 
@@ -435,8 +767,13 @@ class PlaylistManagerApp(tk.Tk):
 
     # ---------- STARTUP STATS ----------
 
-    def _process_single_playlist_startup(self, pl: dict, base_path: str) -> dict:
-        """Process a single playlist during startup (for parallel execution)."""
+    def _process_single_playlist_startup(self, pl: dict, base_path: str, force_refresh: bool = False) -> dict:
+        """
+        Process a single playlist during startup (for parallel execution).
+        
+        If force_refresh is False, uses cached playlist_info.json if created today.
+        If force_refresh is True, always fetches fresh data from yt-dlp API.
+        """
         import threading
         
         thread_id = threading.current_thread().name
@@ -463,14 +800,18 @@ class PlaylistManagerApp(tk.Tk):
                 
                 # Try to save playlist_info.json if we can fetch it
                 try:
-                    entries = tools._get_playlist_entries(url, playlist_folder)
+                    entries = tools._get_playlist_entries(url, playlist_folder, force_refresh=True)
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Saved playlist_info.json with {len(entries)} entries")
                 except Exception as e:
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ⚠️  Could not save playlist_info.json: {e}")
             else:
-                log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ playlist_info.json exists")
+                # Check if cache is fresh
+                if not force_refresh and tools._is_playlist_info_fresh(playlist_folder):
+                    log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Using cached playlist_info.json (created today)")
+                else:
+                    log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ playlist_info.json exists")
                     
         except Exception as e:
             timestamp = datetime.now().strftime("%H:%M:%S")
@@ -482,12 +823,13 @@ class PlaylistManagerApp(tk.Tk):
         log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] Refreshing stats...")
         
         try:
-            local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, excluded_ids)
+            local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, excluded_ids, force_refresh=force_refresh)
             pl["local_count"] = local_count
             pl["playlist_count"] = avail_count
             pl["unavailable_count"] = unavail_count
             timestamp = datetime.now().strftime("%H:%M:%S")
-            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Stats: {local_count} local, {avail_count} available, {unavail_count} unavailable")
+            cache_note = " (from cache)" if not force_refresh and tools._is_playlist_info_fresh(playlist_folder) else ""
+            log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ✓ Stats{cache_note}: {local_count} local, {avail_count} available, {unavail_count} unavailable")
         except Exception as e:
             timestamp = datetime.now().strftime("%H:%M:%S")
             log_messages.append(f"[{timestamp}] [{thread_id}] [{title}] ⚠️  Error getting stats: {e}")
@@ -506,14 +848,21 @@ class PlaylistManagerApp(tk.Tk):
         
         return pl
 
-    def _refresh_all_playlist_stats_from_disk(self):
+    def _refresh_all_playlist_stats_from_disk(self, force_refresh: bool = False):
+        """
+        Refresh stats for all playlists.
+        
+        If force_refresh is False (default), uses cached playlist_info.json if created today.
+        If force_refresh is True, always fetches fresh data from yt-dlp API.
+        """
         base_path = self.config_data["base_path"]
         playlists = self.config_data["playlists"]
         
         if not playlists:
             return
         
-        write_startup_log(f"Starting parallel refresh of {len(playlists)} playlists...\n")
+        refresh_type = "force refresh" if force_refresh else "refresh (using cache when available)"
+        write_startup_log(f"Starting parallel {refresh_type} of {len(playlists)} playlists...\n")
         start_time = datetime.now()
         
         # Use ThreadPoolExecutor for parallel processing
@@ -523,7 +872,7 @@ class PlaylistManagerApp(tk.Tk):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all playlist processing tasks
             future_to_idx = {
-                executor.submit(self._process_single_playlist_startup, pl, base_path): idx
+                executor.submit(self._process_single_playlist_startup, pl, base_path, force_refresh): idx
                 for idx, pl in enumerate(playlists)
             }
             
@@ -538,7 +887,7 @@ class PlaylistManagerApp(tk.Tk):
         
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
-        write_startup_log(f"\n✓ Completed refresh of {len(playlists)} playlists in {duration:.1f} seconds\n")
+        write_startup_log(f"\n✓ Completed {refresh_type} of {len(playlists)} playlists in {duration:.1f} seconds\n")
         
         save_config(self.config_data)
 
@@ -618,36 +967,58 @@ class PlaylistManagerApp(tk.Tk):
             return
         idx = int(sel[0])
         pl = self.config_data["playlists"][idx]
-        current_ids = pl.get("excluded_ids", [])
-
-        initial_text = "\n".join(current_ids)
-        text = simpledialog.askstring(
-            "Edit excluded IDs",
-            f"Enter video IDs to treat as unavailable for:\n{pl.get('title')}\n\n"
-            "One ID per line (or separated by spaces/commas):",
-            initialvalue=initial_text,
-        )
-        if text is None:
-            return
-
-        raw = text.replace(",", " ").replace("\r", " ")
-        ids = [t.strip() for t in raw.split() if t.strip()]
-        pl["excluded_ids"] = sorted(set(ids))
-        save_config(self.config_data)
-
+        
+        # Create exclusions editor window
+        ExclusionsEditorDialog(self, pl, idx, self.config_data, self._on_exclusions_updated)
+    
+    def _on_exclusions_updated(self, playlist_idx: int):
+        """Callback when exclusions are updated."""
+        pl = self.config_data["playlists"][playlist_idx]
         base_path = self.config_data["base_path"]
         url = pl.get("url", "")
         title = pl.get("title", "")
-        local_count, avail_count, unavail_count = get_playlist_stats(base_path, title, url, pl["excluded_ids"])
+        
+        # Refresh stats
+        local_count, avail_count, unavail_count = get_playlist_stats(
+            base_path, title, url, pl["excluded_ids"]
+        )
         pl["local_count"] = local_count
         pl["playlist_count"] = avail_count
         pl["unavailable_count"] = unavail_count
+        
         save_config(self.config_data)
         self._refresh_playlist_table()
         self._append_log(
             f"\nUpdated exclusions for {title}.\n"
-            f"Excluded IDs: {', '.join(pl['excluded_ids'])}\n"
+            f"Excluded: {len(pl['excluded_ids'])} video(s)\n"
         )
+
+    def _force_refresh_playlists(self):
+        """Force refresh all playlist stats from yt-dlp API (ignore cache)."""
+        if not messagebox.askyesno(
+            "Force Refresh Playlists",
+            "This will fetch fresh playlist data from YouTube for all playlists.\n\n"
+            "This may take a few minutes depending on the number of playlists.\n\n"
+            "Continue?"
+        ):
+            return
+        
+        self._append_log("\n=== Force refreshing all playlists ===\n")
+        self._append_log("Fetching fresh data from YouTube API...\n")
+        
+        # Run refresh in background thread to avoid blocking UI
+        def refresh_worker():
+            try:
+                self._refresh_all_playlist_stats_from_disk(force_refresh=True)
+                self.log_queue.put("\n✓ Force refresh completed!\n")
+            except Exception as e:
+                self.log_queue.put(f"\n❌ Error during refresh: {e}\n")
+            finally:
+                # Refresh table on main thread
+                self.after(100, self._refresh_playlist_table)
+        
+        worker = threading.Thread(target=refresh_worker, daemon=True)
+        worker.start()
 
     def _fix_all_folder_structures(self):
         """Manually fix folder structures for all playlists."""
@@ -701,10 +1072,6 @@ class PlaylistManagerApp(tk.Tk):
         self._run_on_selected()
 
     def _run_on_selected(self):
-        if self.is_working:
-            messagebox.showinfo("Busy", "A task is already running.")
-            return
-
         sel = self.tree.selection()
         if not sel:
             messagebox.showwarning("No selection", "Please select a playlist.")
@@ -714,9 +1081,41 @@ class PlaylistManagerApp(tk.Tk):
         url = pl.get("url")
         title = pl.get("title")
 
-        mode = self._ask_mode()
+        mode = self._ask_mode(title)
         if not mode:
             return
+        
+        # Check operation constraints
+        is_download_mode = mode == "download_extract"
+        is_extraction_mode = mode == "extract_only"
+        
+        if is_download_mode:
+            # Only one download at a time
+            if self.is_downloading:
+                messagebox.showwarning(
+                    "Download in Progress",
+                    f"A download is already running for '{self.downloading_playlist}'.\n\n"
+                    "Please wait for it to complete or cancel it first."
+                )
+                return
+        
+        if is_extraction_mode:
+            # Can't extract from playlist being downloaded
+            if self.is_downloading and self.downloading_playlist == title:
+                messagebox.showwarning(
+                    "Download in Progress",
+                    f"Cannot extract audio while downloading '{title}'.\n\n"
+                    "Please wait for download to complete first."
+                )
+                return
+            
+            # Check if already extracting this playlist
+            if title in self.extraction_workers:
+                messagebox.showwarning(
+                    "Extraction in Progress",
+                    f"Audio extraction is already running for '{title}'."
+                )
+                return
 
         self.progress_var.set(0.0)
         self.total_items = 0
@@ -726,15 +1125,25 @@ class PlaylistManagerApp(tk.Tk):
             f"Selected playlist: {title}\nURL: {url}\nMode: {mode}\n\n"
         )
 
-        self.is_working = True
-        self.worker = threading.Thread(
+        # Create and track worker based on operation type
+        worker = threading.Thread(
             target=self._run_mode_worker,
             args=(idx, mode, url, title),
             daemon=True,
         )
-        self.worker.start()
+        
+        if is_download_mode:
+            self.download_worker = worker
+            self.is_downloading = True
+            self.downloading_playlist = title
+            self._append_log(f"🔽 Download started for '{title}'\n")
+        else:  # extraction mode
+            self.extraction_workers[title] = worker
+            self._append_log(f"🎵 Audio extraction started for '{title}'\n")
+        
+        worker.start()
 
-    def _ask_mode(self) -> str | None:
+    def _ask_mode(self, playlist_title: str) -> str | None:
         dlg = tk.Toplevel(self)
         dlg.title("Select mode")
         dlg.transient(self)
@@ -742,7 +1151,33 @@ class PlaylistManagerApp(tk.Tk):
 
         choice = tk.StringVar(value="")
 
-        ttk.Label(dlg, text="Choose what to do for this playlist:").pack(
+        # Check if batch is in progress
+        base_path = self.config_data["base_path"]
+        safe_title = tools._sanitize_title(playlist_title)
+        playlist_folder = os.path.join(base_path, safe_title)
+        batch_progress_file = os.path.join(playlist_folder, "batch_progress.json")
+        
+        has_batch_progress = False
+        batch_info = ""
+        
+        if os.path.exists(batch_progress_file):
+            try:
+                with open(batch_progress_file, "r", encoding="utf-8") as f:
+                    progress = json.load(f)
+                    if not progress.get("completed", False) and progress.get("pending_video_ids"):
+                        has_batch_progress = True
+                        remaining = len(progress["pending_video_ids"])
+                        total = progress.get("total_videos", 0)
+                        downloaded = progress.get("downloaded_count", 0)
+                        batch_info = f"\n⚠️ Batch in progress: {downloaded}/{total} downloaded, {remaining} remaining"
+            except Exception:
+                pass
+
+        label_text = "Choose what to do for this playlist:"
+        if batch_info:
+            label_text += batch_info
+        
+        ttk.Label(dlg, text=label_text, wraplength=400).pack(
             padx=12, pady=(12, 6)
         )
 
@@ -750,9 +1185,14 @@ class PlaylistManagerApp(tk.Tk):
             choice.set(val)
             dlg.destroy()
 
+        # Single unified download button
+        download_text = "1 - Download Videos + Extract Audio"
+        if has_batch_progress:
+            download_text += " (Auto-resume batch)"
+        
         ttk.Button(
             dlg,
-            text="1 - Download video + extract audio (MP3)",
+            text=download_text,
             command=lambda: set_choice("download_extract"),
         ).pack(fill=tk.X, padx=12, pady=4)
 
@@ -767,11 +1207,29 @@ class PlaylistManagerApp(tk.Tk):
         return val or None
 
     def _request_cancel(self):
-        if not self.is_working:
+        # Check if any operations are running
+        has_download = self.is_downloading
+        has_extractions = len(self.extraction_workers) > 0
+        
+        if not has_download and not has_extractions:
             messagebox.showinfo("No task", "No task is currently running.")
             return
+        
+        # Build cancellation message
+        operations = []
+        if has_download:
+            operations.append(f"Download: '{self.downloading_playlist}'")
+        if has_extractions:
+            for title in self.extraction_workers.keys():
+                operations.append(f"Extraction: '{title}'")
+        
+        msg = "Cancel the following operations?\n\n" + "\n".join(operations)
+        
+        if not messagebox.askyesno("Cancel Operations", msg):
+            return
+        
         self.cancel_requested = True
-        self._append_log("\nCancellation requested. Waiting for current step to finish...\n")
+        self._append_log("\n⚠️ Cancellation requested for all operations. Waiting for current steps to finish...\n")
 
     def _run_mode_worker(self, index: int, mode: str, url: str, title: str):
         import sys
@@ -807,6 +1265,7 @@ class PlaylistManagerApp(tk.Tk):
             excluded_ids = set(playlist_cfg.get("excluded_ids", [])) if playlist_cfg else set()
             
             if mode == "download_extract":
+                # Smart download: automatically handles batch resume/new batch/small updates
                 failed_ids = tools.download_playlist_with_video_and_audio(url, as_mp3=True, excluded_ids=excluded_ids)
                 
                 # Check if cancelled before continuing
@@ -832,10 +1291,24 @@ class PlaylistManagerApp(tk.Tk):
         except Exception as e:
             print(f"\n❌ ERROR in worker: {e}\n")
         finally:
+            # Close the TeeLogger file handle
+            qlog.close()
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            self.log_queue.put("\n✓ Task ended.\n")
-            self.is_working = False
+            
+            # Clean up worker tracking based on operation type
+            is_download_mode = mode == "download_extract"
+            
+            if is_download_mode:
+                self.is_downloading = False
+                self.downloading_playlist = None
+                self.download_worker = None
+                self.log_queue.put(f"\n✓ Download task ended for '{title}'.\n")
+            else:  # extraction mode
+                if title in self.extraction_workers:
+                    del self.extraction_workers[title]
+                self.log_queue.put(f"\n✓ Extraction task ended for '{title}'.\n")
+            
             tools.GLOBAL_RUNSTATE = None
             self.progress_var.set(100.0)
             self._refresh_playlist_table()
@@ -898,24 +1371,54 @@ class PlaylistManagerApp(tk.Tk):
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
+    def _update_status_label(self):
+        """Update status label to show active operations."""
+        status_parts = []
+        
+        if self.is_downloading:
+            status_parts.append(f"🔽 Downloading: {self.downloading_playlist}")
+        
+        if self.extraction_workers:
+            extraction_list = ", ".join(self.extraction_workers.keys())
+            status_parts.append(f"🎵 Extracting: {extraction_list}")
+        
+        if status_parts:
+            self.status_label.config(text=" | ".join(status_parts))
+        else:
+            self.status_label.config(text="")
+    
     def _poll_log_queue(self):
+        # Process log messages (limit to prevent UI blocking)
+        processed = 0
+        max_messages_per_poll = 50  # Limit messages processed per poll
+        
         try:
-            while True:
+            while processed < max_messages_per_poll:
                 s = self.log_queue.get_nowait()
                 self._append_log(s)
+                processed += 1
         except queue.Empty:
             pass
 
+        # Update progress bar
         if self.total_items > 0:
             pct = min(100.0, max(0.0, 100.0 * self.current_item_index / self.total_items))
             self.progress_var.set(pct)
 
+        # Update status label
+        self._update_status_label()
+
+        # Handle cancellation
         if getattr(self, "cancel_requested", False):
             rs = getattr(tools, "GLOBAL_RUNSTATE", None)
             if rs is not None:
                 rs.cancelled = True
 
-        self.after(100, self._poll_log_queue)
+        # Force UI update to prevent "Not Responding"
+        self.update_idletasks()
+        
+        # Schedule next poll (50ms for better responsiveness)
+        self.after(50, self._poll_log_queue)
 
     def _get_playlist_config(self, url: str) -> dict | None:
         """Get playlist config from config_data by URL."""
