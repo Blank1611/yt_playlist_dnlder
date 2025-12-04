@@ -1,1 +1,9 @@
-yt-dlp==2024.12.13
+# API Backend Requirements
+# Using newer versions compatible with Python 3.13
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+python-multipart>=0.0.12
+
+# Core dependencies
+yt-dlp>=2024.3.10

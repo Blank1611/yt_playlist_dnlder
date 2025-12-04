@@ -1,195 +1,350 @@
-# YouTube Playlist Audio Tools
+# YouTube Playlist Manager - REST API
 
-A Python application to download YouTube playlists and extract audio as MP3 files with a GUI manager.
+A FastAPI-based REST API backend for managing YouTube playlist downloads and audio extraction. Designed to be consumed by a separate React frontend.
 
 ## Features
 
-- Download YouTube playlists with best video + audio quality
-- Automatically extract audio to MP3 format
-- GUI-based playlist manager with stats tracking
-- Per-playlist exclusion list for unavailable videos
-- Logging system for all operations
-- Archive system to avoid re-downloading
+- RESTful API for all playlist operations
+- Background task processing for downloads and extractions
+- Real-time task progress tracking
+- Streaming logs for active operations
+- CORS-enabled for frontend integration
+- Async/await support for better performance
 
-## System Requirements
+## Quick Start
 
-- Python 3.8+
-- FFmpeg (for audio extraction)
-- Windows/Mac/Linux
-
-## Installation
-
-### 1. Clone or download this project
+### 1. Install Dependencies
 
 ```bash
-cd testyoutube
+pip install -r requirements_api.txt
 ```
 
-### 2. Create a Python virtual environment
-
-```bash
-python -m venv venv
-```
-
-### 3. Activate the virtual environment
-
-**On Windows:**
-```bash
-venv\Scripts\activate
-```
-
-**On Mac/Linux:**
-```bash
-source venv/bin/activate
-```
-
-### 4. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 5. Install FFmpeg
-
-FFmpeg is required to extract audio from video files.
-
-**On Windows:**
-- **Option A (Automatic via Chocolatey):**
-  ```bash
-  choco install ffmpeg
-  ```
-  (Install Chocolatey first if you don't have it: https://chocolatey.org/install)
-
-- **Option B (Manual):**
-  1. Download from https://ffmpeg.org/download.html
-  2. Extract to a folder (e.g., `C:\ffmpeg`)
-  3. Add the `bin` folder to your Windows PATH:
-     - Right-click "This PC" → Properties
-     - Click "Advanced system settings"
-     - Click "Environment Variables"
-     - Under "System variables", find "Path" and click "Edit"
-     - Click "New" and add: `C:\ffmpeg\bin`
-     - Click OK and restart your terminal
-
-**On Mac:**
-```bash
-brew install ffmpeg
-```
-
-**On Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install ffmpeg
-```
-
-### 6. Configure the application
+### 2. Configure the Application
 
 Edit `config.json` with your settings:
 
 ```json
 {
   "base_download_path": "/path/to/youtube/downloads",
-  "cookies_file": "/path/to/yt-cookies.txt"
+  "cookies_file": "/path/to/yt-cookies.txt",
+  "use_browser_cookies": false,
+  "browser_name": "chrome",
+  "audio_extract_mode": "mp3_best",
+  "max_extraction_workers": 4,
+  "batch_size": 200
 }
 ```
 
-#### Configuration Variables
-
-| Variable | Type | Description | Example |
-|----------|------|-------------|---------|
-| `base_download_path` | String | Root directory where playlists will be downloaded | `"E:\\Downloads\\youtube"` or `"/home/user/youtube"` |
-| `cookies_file` | String | Path to YouTube cookies file for authenticated downloads (optional) | `"C:\\cookies\\yt-cookies.txt"` |
-
-**Note:** 
-- Use forward slashes `/` or double backslashes `\\` for Windows paths in JSON
-- If you don't have a cookies file, leave it as-is or provide a valid path. The app will work without it for public videos.
-- To get cookies: Use a browser extension like "Get cookies.txt LOCALLY" and save it
-
-## Usage
-
-### Running the GUI Manager
+### 3. Run the API Server
 
 ```bash
-python yt_playlist_manager_gui_final.py
+python api_server.py
 ```
 
-The GUI will:
-1. Display all saved playlists in a table
-2. Show stats: local videos, available videos, unavailable videos
-3. Let you add/remove playlists
-4. Perform download or extract operations
+Or with uvicorn directly:
 
-### Running the Audio Tools Directly
-
-```python
-import yt_playlist_audio_tools as tools
-
-# Download a playlist and extract audio
-failed_ids = tools.download_playlist_with_video_and_audio(
-    url="https://www.youtube.com/playlist?list=...",
-    as_mp3=True
-)
-
-# Extract audio from already-downloaded videos
-tools.extract_audio_for_existing_playlist(title="My Playlist")
+```bash
+uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## File Structure
+The API will be available at `http://localhost:8000`
+
+### 4. Access API Documentation
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- OpenAPI JSON: `http://localhost:8000/openapi.json`
+
+## API Endpoints
+
+### Configuration
+
+- `GET /config` - Get current configuration
+- `PUT /config` - Update configuration
+
+### Playlists
+
+- `GET /playlists` - List all playlists
+- `POST /playlists` - Add a new playlist
+- `GET /playlists/{playlist_idx}` - Get specific playlist
+- `PUT /playlists/{playlist_idx}` - Update playlist (e.g., excluded IDs)
+- `DELETE /playlists/{playlist_idx}` - Remove playlist
+- `POST /playlists/{playlist_idx}/refresh?force=false` - Refresh playlist stats
+
+### Tasks
+
+- `POST /playlists/{playlist_idx}/tasks` - Start download/extraction task
+- `GET /tasks` - List all tasks
+- `GET /tasks/{task_id}` - Get task status and progress
+- `POST /tasks/{task_id}/cancel` - Cancel running task
+- `GET /tasks/{task_id}/logs?offset=0&limit=100` - Get task logs
+
+## API Usage Examples
+
+### Add a Playlist
+
+```bash
+curl -X POST "http://localhost:8000/playlists" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.youtube.com/playlist?list=PLxxxxxx"
+  }'
+```
+
+### Start Download Task
+
+```bash
+curl -X POST "http://localhost:8000/playlists/0/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "download_extract"
+  }'
+```
+
+### Get Task Status
+
+```bash
+curl "http://localhost:8000/tasks/task_0_1234567890"
+```
+
+### Get Task Logs
+
+```bash
+curl "http://localhost:8000/tasks/task_0_1234567890/logs?offset=0&limit=50"
+```
+
+### Update Excluded Videos
+
+```bash
+curl -X PUT "http://localhost:8000/playlists/0" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "excluded_ids": ["video_id_1", "video_id_2"]
+  }'
+```
+
+## Task Modes
+
+### download_extract
+Downloads videos and extracts audio to MP3. This is the main operation mode.
+
+### extract_only
+Extracts audio from already-downloaded videos without downloading new ones.
+
+## Response Models
+
+### Playlist
+```json
+{
+  "url": "https://www.youtube.com/playlist?list=PLxxxxxx",
+  "title": "My Playlist",
+  "last_download_ist": "2024-01-15 10:30:00",
+  "last_extract_ist": "2024-01-15 10:35:00",
+  "local_count": 50,
+  "playlist_count": 48,
+  "unavailable_count": 2,
+  "excluded_ids": ["video_id_1", "video_id_2"]
+}
+```
+
+### TaskStatus
+```json
+{
+  "task_id": "task_0_1234567890",
+  "status": "running",
+  "playlist_title": "My Playlist",
+  "mode": "download_extract",
+  "progress": {
+    "total": 100,
+    "current": 45,
+    "percentage": 45.0
+  },
+  "started_at": "2024-01-15T10:30:00",
+  "completed_at": null
+}
+```
+
+## Frontend Integration
+
+The API is designed to work with a React frontend. Key features for frontend developers:
+
+1. **CORS Enabled**: The API allows cross-origin requests (configure `allow_origins` for production)
+
+2. **Background Tasks**: Long-running operations (downloads, extractions) run in the background. Poll the task status endpoint for updates.
+
+3. **Streaming Logs**: Use the logs endpoint with pagination to display real-time operation logs.
+
+4. **Progress Tracking**: Task progress includes total items, current item, and percentage completion.
+
+5. **Error Handling**: All endpoints return appropriate HTTP status codes and error messages.
+
+## Architecture
 
 ```
-testyoutube/
-├── config.json                          # Main config file (edit this!)
-├── requirements.txt                     # Python dependencies
-├── README.md                            # This file
-├── yt_playlist_audio_tools.py          # Core download/extract logic
-├── yt_playlist_manager_gui_final.py    # GUI application
-├── yt_playlist_gui_config.json         # Auto-generated (GUI state)
-└── logs/                               # Auto-generated (operation logs)
-    ├── app_startup.log
-    └── {playlist_name}.log
+┌─────────────────┐
+│  React Frontend │
+└────────┬────────┘
+         │ HTTP/REST
+         │
+┌────────▼────────┐
+│  FastAPI Server │
+│  (api_server.py)│
+└────────┬────────┘
+         │
+┌────────▼────────────────────┐
+│  yt_playlist_audio_tools.py │
+│  (Core Download Logic)      │
+└────────┬────────────────────┘
+         │
+┌────────▼────────┐
+│   yt-dlp        │
+│   FFmpeg        │
+└─────────────────┘
 ```
 
-## Logs
+## Production Deployment
 
-All operations are logged to the `logs/` folder:
-- `app_startup.log` — Startup operations
-- `{playlist_name}.log` — Individual playlist operations
+### Using Gunicorn + Uvicorn Workers
 
-Check these files if something goes wrong.
+```bash
+pip install gunicorn
+gunicorn api_server:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+```
+
+### Using Docker
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install FFmpeg
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements_api.txt .
+RUN pip install --no-cache-dir -r requirements_api.txt
+
+# Copy application files
+COPY api_server.py .
+COPY yt_playlist_audio_tools.py .
+COPY config.json .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Build and run:
+
+```bash
+docker build -t yt-playlist-api .
+docker run -p 8000:8000 -v /path/to/downloads:/downloads yt-playlist-api
+```
+
+### Environment Variables
+
+You can override config values with environment variables:
+
+```bash
+export BASE_DOWNLOAD_PATH="/path/to/downloads"
+export COOKIES_FILE="/path/to/cookies.txt"
+python api_server.py
+```
+
+## Security Considerations
+
+1. **CORS Configuration**: Update `allow_origins` in production to only allow your frontend domain
+2. **Authentication**: Add authentication middleware for production use
+3. **Rate Limiting**: Consider adding rate limiting to prevent abuse
+4. **File Access**: Ensure the API only accesses files within the configured base path
+5. **Input Validation**: All inputs are validated using Pydantic models
 
 ## Troubleshooting
 
-### "FFmpeg not found"
-- Verify FFmpeg is installed: `ffmpeg -version`
-- Check it's in your PATH (restart terminal after adding to PATH)
+### API won't start
+- Check if port 8000 is already in use
+- Verify all dependencies are installed: `pip install -r requirements_api.txt`
+- Check `config.json` exists and is valid JSON
 
-### "Config file not found"
-- Ensure `config.json` exists in the same directory as the scripts
-- Check the file path is correct
+### Tasks fail immediately
+- Verify FFmpeg is installed and in PATH
+- Check `base_download_path` in config is writable
+- Review task logs via the `/tasks/{task_id}/logs` endpoint
 
-### Videos not downloading
-- Check if the playlist URL is correct
-- Try without cookies file first (remove it from config if present)
-- Check logs in `logs/` folder for error details
+### CORS errors in browser
+- Verify the API is running
+- Check CORS middleware configuration in `api_server.py`
+- Ensure frontend is making requests to the correct API URL
 
-### Audio extraction fails
-- Ensure FFmpeg is properly installed
-- Check that video files exist in the download folder
-- Check logs for specific error messages
+## Development
 
-## Advanced Usage
+### Running in Development Mode
 
-### Excluding unavailable videos
-The GUI allows you to manually mark video IDs as unavailable:
-1. Select a playlist in the table
-2. Click "Edit exclusions for selected"
-3. Enter video IDs (one per line)
+```bash
+uvicorn api_server:app --reload --log-level debug
+```
 
-These IDs won't be counted as "available" when checking playlist stats.
+### Testing with curl
+
+```bash
+# Health check
+curl http://localhost:8000/
+
+# List playlists
+curl http://localhost:8000/playlists
+
+# Get API docs
+curl http://localhost:8000/openapi.json
+```
+
+### Testing with Python
+
+```python
+import requests
+
+# Add playlist
+response = requests.post(
+    "http://localhost:8000/playlists",
+    json={"url": "https://www.youtube.com/playlist?list=PLxxxxxx"}
+)
+print(response.json())
+
+# Start download
+response = requests.post(
+    "http://localhost:8000/playlists/0/tasks",
+    json={"mode": "download_extract"}
+)
+task = response.json()
+print(f"Task started: {task['task_id']}")
+```
+
+## Additional Documentation
+
+For detailed feature documentation, see the [docs](docs/) folder:
+
+### Core Features
+- [Audio/Video Quality Guide](docs/AUDIO_VIDEO_QUALITY_GUIDE.md) - Quality settings and audio extraction modes
+- [Batch Download Guide](docs/BATCH_DOWNLOAD_GUIDE.md) - Large playlist batch downloading
+- [Exclusions Editor Guide](docs/EXCLUSIONS_EDITOR_GUIDE.md) - Managing excluded videos
+
+### Error Handling
+- [Error Classification](docs/ERROR_CLASSIFICATION.md) - Understanding error types
+- [Crash Recovery](docs/CRASH_RECOVERY.md) - Recovering from interrupted operations
+- [Transient Error Fix](docs/TRANSIENT_ERROR_FIX.md) - Handling temporary failures
+
+### Technical Documentation
+- [Threading Architecture](docs/THREADING_ARCHITECTURE.md) - Multi-threading implementation
+- [Parallel Operations](docs/PARALLEL_OPERATIONS.md) - Concurrent task execution
+- [Log Rotation Guide](docs/LOG_ROTATION_GUIDE.md) - Automatic log file management
+- [Full documentation index](docs/README.md)
+
+## Quick Reference
+
+See [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) for a quick reference card with common operations and examples.
 
 ## License
 
-Provided as-is for personal use.
-
-## Support
-
-Check the logs folder for detailed error messages if you encounter issues.
+Same as the main application.
