@@ -1,0 +1,48 @@
+# Configuration files (contain personal paths)
+yt_playlist_gui_config.json
+config.json
+yt_serve/backend/.env
+
+# Cookies files (contain authentication data)
+*.txt
+!requirements.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+ytdld/
+venv/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Node.js / Frontend
+node_modules/
+yt_serve/frontend/node_modules/
+yt_serve/frontend/dist/
+yt_serve/frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

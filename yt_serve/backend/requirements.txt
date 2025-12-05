@@ -1,0 +1,20 @@
+# FastAPI and server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+websockets>=13.0
+
+# Database
+sqlalchemy>=2.0.36
+alembic>=1.14.0
+
+# Data validation (use latest for Python 3.14 support)
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# YouTube downloading
+yt-dlp>=2024.12.3
+
+# Utilities
+python-dotenv>=1.0.1
+aiofiles>=24.1.0

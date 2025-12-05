@@ -1,195 +1,215 @@
-# YouTube Playlist Audio Tools
+# YouTube Playlist Manager
 
-A Python application to download YouTube playlists and extract audio as MP3 files with a GUI manager.
+A modern web-based application for downloading and managing YouTube playlists with automatic audio extraction.
 
-## Features
+## Overview
 
-- Download YouTube playlists with best video + audio quality
-- Automatically extract audio to MP3 format
-- GUI-based playlist manager with stats tracking
-- Per-playlist exclusion list for unavailable videos
-- Logging system for all operations
-- Archive system to avoid re-downloading
+This application helps you download entire YouTube playlists, extract audio, and manage your collection efficiently. It features a modern React frontend and a Python FastAPI backend.
 
-## System Requirements
+### Key Features
 
-- Python 3.8+
-- FFmpeg (for audio extraction)
-- Windows/Mac/Linux
+- 📥 **Batch Downloads** - Download entire playlists with progress tracking
+- 🎵 **Audio Extraction** - Automatic audio extraction from videos
+- 🚀 **Real-time Updates** - Live progress bars and status updates
+- 🌙 **Dark Mode** - Easy on the eyes
+- ⚙️ **Settings Editor** - Configure all options through UI
+- 🚫 **Exclusions Management** - Skip specific videos
+- 📊 **Smart Sorting** - Prioritizes playlists needing downloads
+- 🔄 **Migration Tool** - Import from old Tkinter version
+
+## Quick Start
+
+See [QUICKSTART.md](QUICKSTART.md) for a 5-minute setup guide.
+
+## Documentation
+
+### For End Users
+
+Complete guides for using the application:
+
+- **[End User Guide](DOCS/end-user-docs/END_USER_GUIDE.md)** - Complete setup and usage
+- **[Getting Started](DOCS/end-user-docs/GETTING_STARTED.md)** - First-time setup
+- **[Troubleshooting](DOCS/end-user-docs/TROUBLESHOOTING.md)** - Common issues
+- **[Migration Guide](DOCS/end-user-docs/MIGRATION_GUIDE.md)** - Import from Tkinter app
+
+[Browse all end-user docs →](DOCS/end-user-docs/)
+
+### For Developers
+
+Technical documentation for contributors:
+
+- **[Developer Guide](DOCS/developer-docs/DEVELOPER_GUIDE.md)** - Development setup
+- **[Architecture](DOCS/developer-docs/COMPLETE.md)** - System design
+- **[API Documentation](DOCS/developer-docs/TESTING_GUIDE.md)** - API endpoints
+- **[Frontend Guide](DOCS/developer-docs/FRONTEND_COMPLETE.md)** - React app details
+
+[Browse all developer docs →](DOCS/developer-docs/)
+
+## Technology Stack
+
+### Backend
+- **Python 3.8+** with FastAPI
+- **SQLite** database
+- **yt-dlp** for downloads
+- **WebSocket** for real-time updates
+
+### Frontend
+- **React 18** with TypeScript
+- **Vite** for build tooling
+- **TanStack Query** for data fetching
+- **Tailwind CSS** for styling
+
+## Screenshots
+
+### Main Interface
+- Grid view of all playlists
+- Real-time progress tracking
+- Smart sorting (pending downloads first)
+- Color-coded caught-up playlists
+
+### Features
+- Settings modal for configuration
+- Exclusions editor for managing skipped videos
+- Dark mode toggle
+- Responsive design
 
 ## Installation
 
-### 1. Clone or download this project
+### Prerequisites
 
-```bash
-cd testyoutube
-```
+- Python 3.8 or higher
+- Node.js 16 or higher
+- Git
 
-### 2. Create a Python virtual environment
+### Setup Steps
 
-```bash
-python -m venv venv
-```
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/youtube-playlist-manager.git
+   cd youtube-playlist-manager
+   ```
 
-### 3. Activate the virtual environment
+2. **Set up backend**
+   ```bash
+   cd yt_serve/backend
+   python -m venv venv
+   venv\Scripts\activate  # Windows
+   pip install -r requirements.txt
+   cp .env.example .env
+   # Edit .env with your settings
+   ```
 
-**On Windows:**
-```bash
-venv\Scripts\activate
-```
+3. **Set up frontend**
+   ```bash
+   cd ../frontend
+   npm install
+   ```
 
-**On Mac/Linux:**
-```bash
-source venv/bin/activate
-```
+4. **Run the application**
+   
+   Terminal 1 (Backend):
+   ```bash
+   cd yt_serve/backend
+   venv\Scripts\activate
+   python run.py
+   ```
+   
+   Terminal 2 (Frontend):
+   ```bash
+   cd yt_serve/frontend
+   npm run dev
+   ```
 
-### 4. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 5. Install FFmpeg
-
-FFmpeg is required to extract audio from video files.
-
-**On Windows:**
-- **Option A (Automatic via Chocolatey):**
-  ```bash
-  choco install ffmpeg
-  ```
-  (Install Chocolatey first if you don't have it: https://chocolatey.org/install)
-
-- **Option B (Manual):**
-  1. Download from https://ffmpeg.org/download.html
-  2. Extract to a folder (e.g., `C:\ffmpeg`)
-  3. Add the `bin` folder to your Windows PATH:
-     - Right-click "This PC" → Properties
-     - Click "Advanced system settings"
-     - Click "Environment Variables"
-     - Under "System variables", find "Path" and click "Edit"
-     - Click "New" and add: `C:\ffmpeg\bin`
-     - Click OK and restart your terminal
-
-**On Mac:**
-```bash
-brew install ffmpeg
-```
-
-**On Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install ffmpeg
-```
-
-### 6. Configure the application
-
-Edit `config.json` with your settings:
-
-```json
-{
-  "base_download_path": "/path/to/youtube/downloads",
-  "cookies_file": "/path/to/yt-cookies.txt"
-}
-```
-
-#### Configuration Variables
-
-| Variable | Type | Description | Example |
-|----------|------|-------------|---------|
-| `base_download_path` | String | Root directory where playlists will be downloaded | `"E:\\Downloads\\youtube"` or `"/home/user/youtube"` |
-| `cookies_file` | String | Path to YouTube cookies file for authenticated downloads (optional) | `"C:\\cookies\\yt-cookies.txt"` |
-
-**Note:** 
-- Use forward slashes `/` or double backslashes `\\` for Windows paths in JSON
-- If you don't have a cookies file, leave it as-is or provide a valid path. The app will work without it for public videos.
-- To get cookies: Use a browser extension like "Get cookies.txt LOCALLY" and save it
+5. **Open browser**
+   
+   Navigate to http://localhost:5173
 
 ## Usage
 
-### Running the GUI Manager
+1. **Add a playlist** - Paste YouTube playlist URL and click "Add"
+2. **Download videos** - Click "Both" to download and extract audio
+3. **Monitor progress** - Watch real-time progress bars
+4. **Manage exclusions** - Click "Edit" to skip specific videos
+5. **Configure settings** - Click gear icon to adjust options
 
-```bash
-python yt_playlist_manager_gui_final.py
-```
-
-The GUI will:
-1. Display all saved playlists in a table
-2. Show stats: local videos, available videos, unavailable videos
-3. Let you add/remove playlists
-4. Perform download or extract operations
-
-### Running the Audio Tools Directly
-
-```python
-import yt_playlist_audio_tools as tools
-
-# Download a playlist and extract audio
-failed_ids = tools.download_playlist_with_video_and_audio(
-    url="https://www.youtube.com/playlist?list=...",
-    as_mp3=True
-)
-
-# Extract audio from already-downloaded videos
-tools.extract_audio_for_existing_playlist(title="My Playlist")
-```
-
-## File Structure
+## Project Structure
 
 ```
-testyoutube/
-├── config.json                          # Main config file (edit this!)
-├── requirements.txt                     # Python dependencies
-├── README.md                            # This file
-├── yt_playlist_audio_tools.py          # Core download/extract logic
-├── yt_playlist_manager_gui_final.py    # GUI application
-├── yt_playlist_gui_config.json         # Auto-generated (GUI state)
-└── logs/                               # Auto-generated (operation logs)
-    ├── app_startup.log
-    └── {playlist_name}.log
+youtube-playlist-manager/
+├── DOCS/                          # Documentation
+│   ├── developer-docs/           # For developers
+│   └── end-user-docs/            # For users
+├── yt_serve/                     # Web application
+│   ├── backend/                  # Python FastAPI backend
+│   └── frontend/                 # React TypeScript frontend
+├── yt_playlist_audio_tools.py   # Core download logic
+├── migrate_playlists.py         # Migration script
+├── README.md                     # This file
+└── QUICKSTART.md                 # Quick setup guide
 ```
 
-## Logs
+## Features in Detail
 
-All operations are logged to the `logs/` folder:
-- `app_startup.log` — Startup operations
-- `{playlist_name}.log` — Individual playlist operations
+### Download Management
+- Batch downloading with configurable limits
+- Automatic retry on transient errors
+- Error classification (permanent vs temporary)
+- Custom archive system
 
-Check these files if something goes wrong.
+### Audio Extraction
+- Multiple modes (copy, MP3, Opus)
+- Parallel extraction (configurable workers)
+- Automatic fallback on errors
+
+### User Interface
+- Modern, responsive design
+- Real-time progress tracking
+- Dark mode support
+- Settings editor
+- Exclusions management
+- Smart playlist sorting
+
+### Migration
+- Import playlists from Tkinter version
+- Preserve all metadata
+- Safe, non-destructive process
+
+## Contributing
+
+We welcome contributions! Please see:
+
+- [Developer Guide](DOCS/developer-docs/DEVELOPER_GUIDE.md) for setup
+- [Architecture docs](DOCS/developer-docs/COMPLETE.md) for design
+- GitHub Issues for bug reports and feature requests
 
 ## Troubleshooting
 
-### "FFmpeg not found"
-- Verify FFmpeg is installed: `ffmpeg -version`
-- Check it's in your PATH (restart terminal after adding to PATH)
+Common issues and solutions:
 
-### "Config file not found"
-- Ensure `config.json` exists in the same directory as the scripts
-- Check the file path is correct
+- **Backend won't start** - Check Python version, virtual environment
+- **Frontend won't start** - Run `npm install`, check Node version
+- **Downloads fail** - Update yt-dlp: `pip install --upgrade yt-dlp`
+- **Port conflicts** - Change ports in config files
 
-### Videos not downloading
-- Check if the playlist URL is correct
-- Try without cookies file first (remove it from config if present)
-- Check logs in `logs/` folder for error details
-
-### Audio extraction fails
-- Ensure FFmpeg is properly installed
-- Check that video files exist in the download folder
-- Check logs for specific error messages
-
-## Advanced Usage
-
-### Excluding unavailable videos
-The GUI allows you to manually mark video IDs as unavailable:
-1. Select a playlist in the table
-2. Click "Edit exclusions for selected"
-3. Enter video IDs (one per line)
-
-These IDs won't be counted as "available" when checking playlist stats.
+See [Troubleshooting Guide](DOCS/end-user-docs/TROUBLESHOOTING.md) for more help.
 
 ## License
 
-Provided as-is for personal use.
+[Your License Here]
+
+## Acknowledgments
+
+- **yt-dlp** - YouTube download library
+- **FastAPI** - Modern Python web framework
+- **React** - UI framework
+- **Tailwind CSS** - Styling framework
 
 ## Support
 
-Check the logs folder for detailed error messages if you encounter issues.
+- 📖 [Documentation](DOCS/)
+- 🐛 [Report Issues](https://github.com/YOUR_USERNAME/youtube-playlist-manager/issues)
+- 💬 [Discussions](https://github.com/YOUR_USERNAME/youtube-playlist-manager/discussions)
+
+---
+
+**Made with ❤️ for YouTube playlist enthusiasts**
