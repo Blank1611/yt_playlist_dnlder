@@ -1,19 +1,57 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { playlistsApi, jobsApi, configApi, type Config } from './api'
-import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X } from 'lucide-react'
-import type { Playlist, Job } from './types'
+import { playlistsApi, jobsApi, configApi, type Config } from './services/api'
+import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ChevronDown, ChevronRight } from 'lucide-react'
+import type { Playlist, Job } from './services/types'
 
 function App() {
   const [newPlaylistUrl, setNewPlaylistUrl] = useState('')
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showInitialSetup, setShowInitialSetup] = useState(false)
   const [editingExclusions, setEditingExclusions] = useState<Playlist | null>(null)
+  const [viewingLogs, setViewingLogs] = useState<Job | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    const saved = localStorage.getItem('viewMode')
+    return (saved as 'grid' | 'list') || 'grid'
+  })
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
   })
   const queryClient = useQueryClient()
+
+  // Save view mode to localStorage
+  useEffect(() => {
+    localStorage.setItem('viewMode', viewMode)
+  }, [viewMode])
+
+  const toggleRow = (playlistId: number) => {
+    const newExpanded = new Set(expandedRows)
+    if (newExpanded.has(playlistId)) {
+      newExpanded.delete(playlistId)
+    } else {
+      newExpanded.add(playlistId)
+    }
+    setExpandedRows(newExpanded)
+  }
+
+  // Check if initial setup is needed
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: async () => {
+      const res = await configApi.get()
+      return res.data
+    },
+  })
+
+  // Show initial setup modal if needed
+  useEffect(() => {
+    if (config?.needs_setup) {
+      setShowInitialSetup(true)
+    }
+  }, [config])
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -103,6 +141,32 @@ function App() {
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">YouTube Playlist Manager</h1>
           
           <div className="flex gap-2">
+            {/* View Mode Toggle */}
+            <div className="flex gap-1 p-1 rounded-lg bg-gray-200 dark:bg-gray-700">
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`p-2 rounded transition-colors ${
+                  viewMode === 'grid'
+                    ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                }`}
+                title="Grid View"
+              >
+                <Grid3x3 className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                className={`p-2 rounded transition-colors ${
+                  viewMode === 'list'
+                    ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                }`}
+                title="List View"
+              >
+                <List className="w-5 h-5" />
+              </button>
+            </div>
+            
             {/* Settings Button */}
             <button
               onClick={() => setShowSettings(true)}
@@ -151,13 +215,14 @@ function App() {
           </div>
         </div>
 
-        {/* Playlists Grid */}
+        {/* Playlists View */}
         {playlistsLoading ? (
           <div className="text-center py-12">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600" />
             <p className="mt-2 text-gray-600 dark:text-gray-400">Loading playlists...</p>
           </div>
-        ) : (
+        ) : viewMode === 'grid' ? (
+          /* Grid View */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {playlists
               ?.slice()
@@ -200,21 +265,70 @@ function App() {
                       </div>
                     </div>
 
-                    {/* Progress Bar */}
+                    {/* Progress Bars */}
                     {runningJob && (
-                      <div className="mb-4">
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-gray-600 dark:text-gray-400">{runningJob.job_type}</span>
-                          <span className="font-semibold text-gray-900 dark:text-white">{runningJob.progress.toFixed(1)}%</span>
-                        </div>
-                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                          <div
-                            className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all"
-                            style={{ width: `${runningJob.progress}%` }}
-                          />
-                        </div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          {runningJob.completed_items} / {runningJob.total_items} items
+                      <div className="mb-4 space-y-3">
+                        {/* Download Progress */}
+                        {runningJob.download_status && runningJob.download_status !== 'completed' && (
+                          <div>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-gray-600 dark:text-gray-400">📥 Downloading</span>
+                              <span className="font-semibold text-gray-900 dark:text-white">
+                                {runningJob.download_completed} / {runningJob.download_total}
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                              <div
+                                className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all"
+                                style={{ 
+                                  width: `${runningJob.download_total > 0 ? (runningJob.download_completed / runningJob.download_total * 100) : 0}%` 
+                                }}
+                              />
+                            </div>
+                            {runningJob.download_batch_info && (
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                {runningJob.download_batch_info}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Extraction Progress */}
+                        {runningJob.extract_status && runningJob.extract_status !== 'completed' && (
+                          <div>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-gray-600 dark:text-gray-400">🎵 Extracting Audio</span>
+                              <span className="font-semibold text-gray-900 dark:text-white">
+                                {runningJob.extract_completed} / {runningJob.extract_total}
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                              <div
+                                className="bg-purple-600 dark:bg-purple-500 h-2 rounded-full transition-all"
+                                style={{ 
+                                  width: `${runningJob.extract_total > 0 ? (runningJob.extract_completed / runningJob.extract_total * 100) : 0}%` 
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Show completion message if both are done */}
+                        {runningJob.download_status === 'completed' && runningJob.extract_status === 'completed' && (
+                          <div className="text-sm text-green-600 dark:text-green-400">
+                            ✓ Download and extraction completed
+                          </div>
+                        )}
+                        
+                        {/* View Logs Button */}
+                        <div className="mt-2">
+                          <button
+                            onClick={() => setViewingLogs(runningJob)}
+                            className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
+                          >
+                            <LogIcon className="w-3 h-3" />
+                            View Logs
+                          </button>
                         </div>
                       </div>
                     )}
@@ -250,7 +364,7 @@ function App() {
                                   title={allDownloaded ? 'All videos downloaded' : 'Download & Extract'}
                                 >
                                   <PlayCircle className="w-4 h-4" />
-                                  Both
+                                  Download & Extract
                                 </button>
                                 <button
                                   onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'download' })}
@@ -325,6 +439,242 @@ function App() {
               )
             })}
           </div>
+        ) : (
+          /* List View */
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Playlist</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Local</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Available</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Unavailable</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {playlists
+                  ?.slice()
+                  .sort((a, b) => {
+                    const aPending = Math.max(0, a.playlist_count - a.local_count)
+                    const bPending = Math.max(0, b.playlist_count - b.local_count)
+                    return bPending - aPending
+                  })
+                  .map((playlist) => {
+                    const runningJob = getRunningJob(playlist.id)
+                    const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
+                    const isExpanded = expandedRows.has(playlist.id)
+                    
+                    return (
+                      <React.Fragment key={playlist.id}>
+                        <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer ${
+                          isCaughtUp ? 'bg-green-50 dark:bg-green-900/20' : ''
+                        }`}>
+                          <td className="px-6 py-4">
+                            <button
+                              onClick={() => toggleRow(playlist.id)}
+                              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                            >
+                              {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+                            </button>
+                          </td>
+                          <td className="px-6 py-4" onClick={() => toggleRow(playlist.id)}>
+                            <div className="text-sm font-medium text-gray-900 dark:text-white">
+                              {playlist.title}
+                              {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
+                            </div>
+                            {runningJob && (
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                {runningJob.download_status === 'running' && `📥 Downloading ${runningJob.download_completed}/${runningJob.download_total}`}
+                                {runningJob.extract_status === 'running' && ` 🎵 Extracting ${runningJob.extract_completed}/${runningJob.extract_total}`}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
+                            <span className="text-sm font-semibold text-green-700 dark:text-green-400">{playlist.local_count}</span>
+                          </td>
+                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
+                            <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</span>
+                          </td>
+                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
+                            <span className="text-sm font-semibold text-red-700 dark:text-red-400">{playlist.unavailable_count}</span>
+                          </td>
+                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
+                            {runningJob ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                Running
+                              </span>
+                            ) : isCaughtUp ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                Complete
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                                Pending
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                        
+                        {/* Expanded Row with Actions */}
+                        {isExpanded && (
+                          <tr className="bg-gray-50 dark:bg-gray-900">
+                            <td colSpan={6} className="px-6 py-4">
+                              <div className="space-y-4">
+                                {/* Progress Bars */}
+                                {runningJob && (
+                                  <div className="space-y-3">
+                                    {runningJob.download_status && runningJob.download_status !== 'completed' && (
+                                      <div>
+                                        <div className="flex justify-between text-sm mb-1">
+                                          <span className="text-gray-600 dark:text-gray-400">📥 Downloading</span>
+                                          <span className="font-semibold text-gray-900 dark:text-white">
+                                            {runningJob.download_completed} / {runningJob.download_total}
+                                          </span>
+                                        </div>
+                                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                          <div
+                                            className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all"
+                                            style={{ 
+                                              width: `${runningJob.download_total > 0 ? (runningJob.download_completed / runningJob.download_total * 100) : 0}%` 
+                                            }}
+                                          />
+                                        </div>
+                                        {runningJob.download_batch_info && (
+                                          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                            {runningJob.download_batch_info}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    
+                                    {runningJob.extract_status && runningJob.extract_status !== 'completed' && (
+                                      <div>
+                                        <div className="flex justify-between text-sm mb-1">
+                                          <span className="text-gray-600 dark:text-gray-400">🎵 Extracting Audio</span>
+                                          <span className="font-semibold text-gray-900 dark:text-white">
+                                            {runningJob.extract_completed} / {runningJob.extract_total}
+                                          </span>
+                                        </div>
+                                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                          <div
+                                            className="bg-purple-600 dark:bg-purple-500 h-2 rounded-full transition-all"
+                                            style={{ 
+                                              width: `${runningJob.extract_total > 0 ? (runningJob.extract_completed / runningJob.extract_total * 100) : 0}%` 
+                                            }}
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                    
+                                    <button
+                                      onClick={() => setViewingLogs(runningJob)}
+                                      className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
+                                    >
+                                      <LogIcon className="w-3 h-3" />
+                                      View Logs
+                                    </button>
+                                  </div>
+                                )}
+                                
+                                {/* Action Buttons */}
+                                <div className="flex gap-2 flex-wrap">
+                                  {runningJob ? (
+                                    <button
+                                      onClick={() => {
+                                        if (confirm('Cancel this job? The current video download will complete first.')) {
+                                          cancelJob.mutate(runningJob.id)
+                                        }
+                                      }}
+                                      disabled={cancelJob.isPending}
+                                      className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-red-400 text-sm flex items-center gap-1"
+                                    >
+                                      {cancelJob.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Cancel Job'}
+                                    </button>
+                                  ) : (
+                                    <>
+                                      {(() => {
+                                        const allDownloaded = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
+                                        return (
+                                          <>
+                                            <button
+                                              onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'both' })}
+                                              disabled={allDownloaded}
+                                              className={`px-4 py-2 ${allDownloaded ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded text-sm flex items-center gap-1`}
+                                            >
+                                              <PlayCircle className="w-4 h-4" />
+                                              Download & Extract
+                                            </button>
+                                            <button
+                                              onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'download' })}
+                                              disabled={allDownloaded}
+                                              className={`px-4 py-2 ${allDownloaded ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'} text-white rounded text-sm flex items-center gap-1`}
+                                            >
+                                              <Download className="w-4 h-4" />
+                                              Download
+                                            </button>
+                                          </>
+                                        )
+                                      })()}
+                                      <button
+                                        onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'extract' })}
+                                        className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm flex items-center gap-1"
+                                      >
+                                        <Music className="w-4 h-4" />
+                                        Extract
+                                      </button>
+                                      <button
+                                        onClick={() => refreshPlaylist.mutate(playlist.id)}
+                                        disabled={refreshPlaylist.isPending}
+                                        className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
+                                      >
+                                        <RefreshCw className={`w-4 h-4 ${refreshPlaylist.isPending ? 'animate-spin' : ''}`} />
+                                        Refresh
+                                      </button>
+                                      {playlist.excluded_ids.length > 0 && (
+                                        <button
+                                          onClick={() => setEditingExclusions(playlist)}
+                                          className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
+                                        >
+                                          <Edit3 className="w-4 h-4" />
+                                          Edit Exclusions ({playlist.excluded_ids.length})
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => {
+                                          if (confirm(`Remove "${playlist.title}" from manager?\n\nDownloaded files will remain intact.`)) {
+                                            deletePlaylist.mutate(playlist.id)
+                                          }
+                                        }}
+                                        className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-sm flex items-center gap-1"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                        Remove
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                                
+                                {/* Metadata */}
+                                <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                                  {playlist.last_download && (
+                                    <div>Last download: {new Date(playlist.last_download).toLocaleString()}</div>
+                                  )}
+                                  {playlist.last_extract && (
+                                    <div>Last extract: {new Date(playlist.last_extract).toLocaleString()}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {playlists?.length === 0 && !playlistsLoading && (
@@ -333,6 +683,17 @@ function App() {
           </div>
         )}
       </main>
+
+      {/* Initial Setup Modal */}
+      {showInitialSetup && (
+        <InitialSetupModal 
+          onClose={() => setShowInitialSetup(false)}
+          onComplete={() => {
+            setShowInitialSetup(false)
+            queryClient.invalidateQueries({ queryKey: ['config'] })
+          }}
+        />
+      )}
 
       {/* Settings Modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
@@ -344,6 +705,206 @@ function App() {
           onClose={() => setEditingExclusions(null)} 
         />
       )}
+      
+      {/* Logs Modal */}
+      {viewingLogs && (
+        <LogsModal 
+          job={viewingLogs} 
+          onClose={() => setViewingLogs(null)} 
+        />
+      )}
+    </div>
+  )
+}
+
+// Initial Setup Modal Component
+function InitialSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
+  const [formData, setFormData] = useState<Partial<Config>>({
+    base_download_path: '',
+    audio_extract_mode: 'copy',
+    max_extraction_workers: 4,
+    batch_size: 200,
+    use_browser_cookies: false,
+    browser_name: 'chrome',
+    cookies_file: null,
+  })
+
+  const updateConfig = useMutation({
+    mutationFn: (data: Partial<Config>) => configApi.update(data),
+    onSuccess: () => {
+      alert('Setup complete! You can now start using the app.')
+      onComplete()
+    },
+    onError: (error) => {
+      alert(`Setup failed: ${error}`)
+    },
+  })
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    // Validate required fields
+    if (!formData.base_download_path?.trim()) {
+      alert('Please enter a download directory path')
+      return
+    }
+    
+    updateConfig.mutate(formData)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6">
+          <div className="mb-6">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Initial Setup</h2>
+            <p className="text-gray-600 dark:text-gray-400">
+              Welcome! Please configure the required settings to get started.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Required: Download Path */}
+            <div className="border-2 border-blue-500 dark:border-blue-400 rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
+              <label className="block text-sm font-bold text-gray-900 dark:text-white mb-1">
+                Download Directory <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.base_download_path || ''}
+                onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="E:\Music\YouTube"
+                required
+              />
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                Full path where playlists will be downloaded (e.g., E:\Music\YouTube)
+              </p>
+            </div>
+
+            {/* Optional: Cookies */}
+            <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Authentication (Optional)
+              </label>
+              
+              <label className="flex items-center space-x-2 mb-3">
+                <input
+                  type="checkbox"
+                  checked={formData.use_browser_cookies || false}
+                  onChange={(e) => setFormData({ ...formData, use_browser_cookies: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Use Browser Cookies</span>
+              </label>
+
+              {formData.use_browser_cookies && (
+                <div>
+                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
+                    Browser
+                  </label>
+                  <select
+                    value={formData.browser_name || 'chrome'}
+                    onChange={(e) => setFormData({ ...formData, browser_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="chrome">Chrome</option>
+                    <option value="firefox">Firefox</option>
+                    <option value="edge">Edge</option>
+                    <option value="safari">Safari</option>
+                  </select>
+                </div>
+              )}
+
+              {!formData.use_browser_cookies && (
+                <div>
+                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
+                    Cookies File Path (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.cookies_file || ''}
+                    onChange={(e) => setFormData({ ...formData, cookies_file: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="path/to/cookies.txt"
+                  />
+                </div>
+              )}
+              
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Required for age-restricted or private videos
+              </p>
+            </div>
+
+            {/* Advanced Settings (Collapsed) */}
+            <details className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
+              <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Advanced Settings (Optional)
+              </summary>
+              
+              <div className="space-y-3 mt-3">
+                <div>
+                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
+                    Audio Extract Mode
+                  </label>
+                  <select
+                    value={formData.audio_extract_mode || 'copy'}
+                    onChange={(e) => setFormData({ ...formData, audio_extract_mode: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="copy">Copy (fastest, no re-encoding)</option>
+                    <option value="mp3_best">MP3 Best Quality</option>
+                    <option value="mp3_high">MP3 High Quality</option>
+                    <option value="opus">Opus</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
+                    Max Concurrent Extractions (1-16)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="16"
+                    value={formData.max_extraction_workers || 4}
+                    onChange={(e) => setFormData({ ...formData, max_extraction_workers: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
+                    Batch Size (videos per day, 1-1000)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={formData.batch_size || 200}
+                    onChange={(e) => setFormData({ ...formData, batch_size: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Limit downloads per day to avoid YouTube bot detection
+                  </p>
+                </div>
+              </div>
+            </details>
+
+            <div className="flex gap-2 pt-4">
+              <button
+                type="submit"
+                disabled={updateConfig.isPending || !formData.base_download_path?.trim()}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 font-medium"
+              >
+                {updateConfig.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                Complete Setup
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   )
 }
@@ -764,6 +1325,101 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
             >
               Cancel
             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Logs Modal Component
+function LogsModal({ job, onClose }: { job: Job; onClose: () => void }) {
+  const logsEndRef = useRef<HTMLDivElement>(null)
+  
+  // Fetch logs with auto-refresh
+  const { data: logs, isLoading } = useQuery({
+    queryKey: ['logs', job.id],
+    queryFn: async () => {
+      const res = await jobsApi.logs(job.id, 100) // Get last 100 lines
+      return res.data
+    },
+    refetchInterval: job.status === 'running' ? 2000 : false, // Refresh every 2s if running
+  })
+
+  // Auto-scroll to bottom when logs update
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs])
+
+  const copyLogs = () => {
+    if (logs) {
+      const logText = logs.map(l => l.message).join('\n')
+      navigator.clipboard.writeText(logText)
+      alert('Logs copied to clipboard!')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+        <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Job Logs</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Job #{job.id} - {job.job_type} - {job.status}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={copyLogs}
+                className="px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
+              >
+                Copy Logs
+              </button>
+              <button
+                onClick={onClose}
+                className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 bg-gray-50 dark:bg-gray-900">
+          {isLoading ? (
+            <div className="text-center py-8">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600" />
+              <p className="mt-2 text-gray-600 dark:text-gray-400">Loading logs...</p>
+            </div>
+          ) : logs && logs.length > 0 ? (
+            <div className="font-mono text-sm space-y-1">
+              {logs.map((log, index) => (
+                <div
+                  key={index}
+                  className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words"
+                >
+                  {log.message}
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              <p>No logs available yet</p>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+          <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+            <span>
+              {job.status === 'running' ? '🔄 Auto-refreshing every 2 seconds' : '✓ Job completed'}
+            </span>
+            <span>
+              {logs?.length || 0} log entries
+            </span>
           </div>
         </div>
       </div>

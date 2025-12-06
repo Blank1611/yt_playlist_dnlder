@@ -1,109 +1,109 @@
 # YouTube Playlist Manager - Web Version
 
-This is the web-based version of the YouTube Playlist Manager, featuring a modern React frontend and Python FastAPI backend.
+A modern web-based YouTube playlist manager with React frontend and FastAPI backend.
 
-## Quick Links
+## Quick Start
 
-- **Main README:** [../README.md](../README.md)
-- **Quick Start:** [../QUICKSTART.md](../QUICKSTART.md)
-- **Documentation:** [../DOCS/](../DOCS/)
+### Prerequisites
 
-## Structure
+- Python 3.8+ (you have 3.14.0 ✓)
+- Node.js 16+
 
-```
-yt_serve/
-├── backend/          # Python FastAPI backend
-│   ├── app/         # Application code
-│   ├── run.py       # Entry point
-│   └── .env         # Configuration
-└── frontend/        # React TypeScript frontend
-    ├── src/         # Source code
-    └── package.json # Dependencies
-```
+### Installation
 
-## Running the Application
-
-### Backend
-
+**Option 1: One-Click Launcher (Easiest)**
 ```bash
+# Just double-click
+LAUNCH_APP.bat
+```
+
+**Option 2: Manual**
+```bash
+# Backend
 cd backend
 python -m venv venv
-venv\Scripts\activate  # Windows
+venv\Scripts\activate
 pip install -r requirements.txt
 python run.py
-```
 
-Backend runs on: http://localhost:8000
-
-### Frontend
-
-```bash
+# Frontend (new terminal)
 cd frontend
 npm install
 npm run dev
 ```
 
-Frontend runs on: http://localhost:5173
+**Option 3: Docker**
+```bash
+docker-compose up
+```
 
-## Documentation
+### Access
 
-All documentation has been organized in the main DOCS folder:
-
-### For End Users
-- [End User Guide](../DOCS/end-user-docs/END_USER_GUIDE.md)
-- [Getting Started](../DOCS/end-user-docs/GETTING_STARTED.md)
-- [Troubleshooting](../DOCS/end-user-docs/TROUBLESHOOTING.md)
-- [Migration Guide](../DOCS/end-user-docs/MIGRATION_GUIDE.md)
-
-### For Developers
-- [Developer Guide](../DOCS/developer-docs/DEVELOPER_GUIDE.md)
-- [Backend Architecture](../DOCS/developer-docs/COMPLETE.md)
-- [Frontend Guide](../DOCS/developer-docs/FRONTEND_COMPLETE.md)
-- [API Testing](../DOCS/developer-docs/TESTING_GUIDE.md)
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8000
+- API Docs: http://localhost:8000/docs
 
 ## Features
 
-✅ **Backend (FastAPI)**
-- RESTful API endpoints
-- WebSocket for real-time updates
-- Background job processing
-- SQLite database
-- File system logging
+✅ Modern React UI with TypeScript  
+✅ FastAPI backend with async support  
+✅ Real-time progress tracking  
+✅ Dark mode  
+✅ Settings editor  
+✅ Exclusions management  
+✅ Batch downloading  
+✅ Parallel audio extraction  
 
-✅ **Frontend (React)**
-- Modern, responsive UI
-- Real-time progress tracking
-- Dark mode
-- Settings editor
-- Exclusions management
-- TanStack Query for data fetching
+## Documentation
 
-## API Documentation
+📚 **[Complete Documentation](DOCS/)** - All guides and references
 
-Once the backend is running, visit:
-- **Swagger UI:** http://localhost:8000/docs
-- **ReDoc:** http://localhost:8000/redoc
+### Quick Links
+- **[DOCS/QUICKSTART.md](DOCS/QUICKSTART.md)** - Get started in 5 minutes
+- **[DOCS/FIRST_RUN_SETUP.md](DOCS/FIRST_RUN_SETUP.md)** - First-run setup wizard
+- **[DOCS/END_USER_GUIDE.md](DOCS/END_USER_GUIDE.md)** - Complete user guide
+- **[DOCS/DEVELOPER_GUIDE.md](DOCS/DEVELOPER_GUIDE.md)** - Developer documentation
+- **[DOCS/TROUBLESHOOTING.md](DOCS/TROUBLESHOOTING.md)** - Common issues & solutions
 
-## Development
+See **[DOCS/README.md](DOCS/README.md)** for complete documentation index.
 
-Both backend and frontend support hot-reload during development:
+## Project Structure
 
-- **Backend:** Uvicorn auto-reloads on file changes
-- **Frontend:** Vite HMR (Hot Module Replacement)
-
-See [Developer Guide](../DOCS/developer-docs/DEVELOPER_GUIDE.md) for detailed development instructions.
-
-## Migration from Tkinter
-
-To import playlists from the old Tkinter version:
-
-```bash
-cd ..
-python migrate_playlists.py
+```
+yt_serve/
+├── backend/              # Python FastAPI backend
+│   ├── app/             # Application code
+│   ├── run.py           # Entry point
+│   └── requirements.txt # Dependencies
+├── frontend/            # React TypeScript frontend
+│   ├── src/            # Source code
+│   └── package.json    # Dependencies
+├── DOCS/               # Documentation
+├── LAUNCH_APP.bat      # One-click launcher
+└── README.md           # This file
 ```
 
-See [Migration Guide](../DOCS/end-user-docs/MIGRATION_GUIDE.md) for details.
+## Building Installer
 
----
+```bash
+# Install Inno Setup first
+# https://jrsoftware.org/isdl.php
 
-For complete documentation, see [../DOCS/](../DOCS/)
+# Build installer
+python build_installer.py
+```
+
+## Independent Project
+
+This project is completely independent and includes:
+- ✅ Own copy of `yt_playlist_audio_tools.py`
+- ✅ All documentation
+- ✅ Build scripts
+- ✅ Launcher scripts
+- ✅ Docker configuration
+
+Can be distributed separately from the Tkinter version!
+
+## License
+
+[Your License]

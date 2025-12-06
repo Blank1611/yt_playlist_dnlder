@@ -8,53 +8,12 @@ from typing import Set, Callable, Optional
 import asyncio
 from datetime import datetime
 
-# Add parent directory to path to import existing tools
-parent_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-sys.path.insert(0, str(parent_dir))
-
-# Create a minimal config.json in backend directory if it doesn't exist
-# This config will be populated from .env file
-backend_dir = Path(__file__).resolve().parent.parent.parent
-config_path = backend_dir / "config.json"
-
-if not config_path.exists():
-    import json
-    from dotenv import load_dotenv
-    
-    # Load .env file
-    env_path = backend_dir / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-    
-    # Create config from environment variables
-    minimal_config = {
-        "base_download_path": os.getenv("BASE_DOWNLOAD_PATH", "downloads"),
-        "use_browser_cookies": os.getenv("USE_BROWSER_COOKIES", "false").lower() == "true",
-        "browser_name": os.getenv("BROWSER_NAME", "chrome"),
-        "cookies_file": os.getenv("COOKIES_FILE"),
-        "audio_extract_mode": os.getenv("AUDIO_EXTRACT_MODE", "copy"),
-        "max_extraction_workers": int(os.getenv("MAX_CONCURRENT_EXTRACTIONS", "4")),
-        "batch_size": int(os.getenv("BATCH_SIZE", "200"))
-    }
-    
-    with open(config_path, "w") as f:
-        json.dump(minimal_config, f, indent=2)
-    
-    print(f"Created config.json from .env settings")
-
-# Change to backend directory for import (where config.json now exists)
-original_cwd = os.getcwd()
-os.chdir(backend_dir)
-
-# Import existing download tools
+# Import download tools from backend core
 try:
-    import yt_playlist_audio_tools as tools
+    from app.core import yt_playlist_audio_tools as tools
 except ImportError as e:
     print(f"Warning: Could not import yt_playlist_audio_tools.py: {e}")
     tools = None
-finally:
-    # Restore original working directory
-    os.chdir(original_cwd)
 
 class DownloadService:
     """Service for downloading playlists using existing logic"""
@@ -93,7 +52,7 @@ class DownloadService:
         Args:
             url: Playlist URL
             excluded_ids: Set of video IDs to exclude
-            progress_callback: Async function(total, current) for progress updates
+            progress_callback: Async function(total, current, batch_info=None) for progress updates
             log_callback: Async function(message) for log messages
         
         Returns:
@@ -110,16 +69,18 @@ class DownloadService:
         
         # Set up callbacks for existing tools
         if progress_callback:
-            async def async_progress(total, current):
-                await progress_callback(total, current)
+            # Store the callback and loop for thread-safe calling
+            main_loop = asyncio.get_event_loop()
             
-            # Wrap async callback for sync code
-            def sync_progress(total, current):
+            def sync_progress(total, current, batch_info=None):
                 try:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(async_progress(total, current))
-                except RuntimeError:
-                    pass  # No event loop
+                    # Use call_soon_threadsafe to schedule the callback in the main loop
+                    asyncio.run_coroutine_threadsafe(
+                        progress_callback(total, current, batch_info),
+                        main_loop
+                    )
+                except Exception as e:
+                    print(f"Progress callback error: {e}")
             
             tools.GLOBAL_PROGRESS_CALLBACK = sync_progress
         
@@ -129,7 +90,7 @@ class DownloadService:
             None,
             tools.download_playlist_with_video_and_audio,
             url,
-            True,  # as_mp3
+            False,  # as_mp3 = False (extraction will be done separately in parallel)
             excluded_ids
         )
         
@@ -154,15 +115,18 @@ class DownloadService:
         
         # Set up callbacks
         if progress_callback:
-            async def async_progress(total, current):
-                await progress_callback(total, current)
+            # Store the callback and loop for thread-safe calling
+            main_loop = asyncio.get_event_loop()
             
             def sync_progress(total, current):
                 try:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(async_progress(total, current))
-                except RuntimeError:
-                    pass
+                    # Use call_soon_threadsafe to schedule the callback in the main loop
+                    asyncio.run_coroutine_threadsafe(
+                        progress_callback(total, current),
+                        main_loop
+                    )
+                except Exception as e:
+                    print(f"Progress callback error: {e}")
             
             tools.GLOBAL_PROGRESS_CALLBACK = sync_progress
         

@@ -98,7 +98,7 @@ class JobManager:
         log_callback: Optional[Callable],
         progress_callback: Optional[Callable]
     ):
-        """Run a job"""
+        """Run a job with separate download and extraction progress"""
         from app.models.database import SessionLocal
         db = SessionLocal()
         
@@ -113,21 +113,38 @@ class JobManager:
             if log_callback:
                 await log_callback(job_id, f"Starting {job_type} for playlist: {playlist.title}")
             
-            # Create progress wrapper
-            async def progress_wrapper(total, current):
+            # Create download progress wrapper
+            async def download_progress_wrapper(total, current, batch_info=None):
                 if self.cancel_flags.get(job_id):
                     raise asyncio.CancelledError("Job cancelled")
                 
-                # Update job
+                # Update job download progress
                 job = db.query(Job).filter(Job.id == job_id).first()
-                job.total_items = total
-                job.completed_items = current
-                job.progress = (current / total * 100) if total > 0 else 0
+                job.download_total = total
+                job.download_completed = current
+                job.download_batch_info = batch_info
+                job.download_status = "running"
                 db.commit()
                 
                 # Callback
                 if progress_callback:
-                    await progress_callback(job_id, job.progress, current, total)
+                    await progress_callback(job_id, None, current, total)
+            
+            # Create extraction progress wrapper
+            async def extract_progress_wrapper(total, current):
+                if self.cancel_flags.get(job_id):
+                    raise asyncio.CancelledError("Job cancelled")
+                
+                # Update job extraction progress
+                job = db.query(Job).filter(Job.id == job_id).first()
+                job.extract_total = total
+                job.extract_completed = current
+                job.extract_status = "running"
+                db.commit()
+                
+                # Callback
+                if progress_callback:
+                    await progress_callback(job_id, None, current, total)
             
             # Create log wrapper
             async def log_wrapper(message):
@@ -138,14 +155,18 @@ class JobManager:
                 if log_callback:
                     await log_callback(job_id, message)
             
-            # Execute job
-            if job_type == "download" or job_type == "both":
+            # Execute job based on type
+            if job_type == "download":
+                # Download only
+                job.download_status = "pending"
+                db.commit()
+                
                 await log_wrapper("Starting download...")
                 
                 failed_ids = await download_service.download_playlist(
                     playlist.url,
                     set(playlist.excluded_ids or []),
-                    progress_callback=progress_wrapper,
+                    progress_callback=download_progress_wrapper,
                     log_callback=log_wrapper
                 )
                 
@@ -157,30 +178,63 @@ class JobManager:
                     existing = set(playlist.excluded_ids or [])
                     playlist.excluded_ids = list(existing.union(failed_ids))
                 
+                job.download_status = "completed"
+                job.download_failed = len(failed_ids)
                 db.commit()
                 
                 await log_wrapper(f"Download completed. Failed: {len(failed_ids)}")
             
-            if job_type == "extract" or job_type == "both":
+            elif job_type == "extract":
+                # Extract only
+                job.extract_status = "pending"
+                db.commit()
+                
                 await log_wrapper("Starting audio extraction...")
                 
                 await download_service.extract_audio(
                     playlist.title,
-                    progress_callback=progress_wrapper,
+                    progress_callback=extract_progress_wrapper,
                     log_callback=log_wrapper
                 )
                 
                 # Update playlist
                 playlist.last_extract = datetime.utcnow()
+                job.extract_status = "completed"
                 db.commit()
                 
                 await log_wrapper("Audio extraction completed")
+            
+            elif job_type == "both":
+                # Download and extract in parallel
+                job.download_status = "pending"
+                job.extract_status = "pending"
+                db.commit()
+                
+                await log_wrapper("Starting download and extraction...")
+                
+                # Start download task
+                download_task = asyncio.create_task(
+                    self._run_download_phase(
+                        job_id, playlist, download_service,
+                        download_progress_wrapper, log_wrapper, db
+                    )
+                )
+                
+                # Start extraction task (will wait for videos to be available)
+                extract_task = asyncio.create_task(
+                    self._run_extraction_phase(
+                        job_id, playlist, download_service,
+                        extract_progress_wrapper, log_wrapper, db
+                    )
+                )
+                
+                # Wait for both to complete
+                await asyncio.gather(download_task, extract_task)
             
             # Update job status
             job = db.query(Job).filter(Job.id == job_id).first()
             job.status = "completed"
             job.completed_at = datetime.utcnow()
-            job.progress = 100.0
             db.commit()
             
             await log_wrapper("Job completed successfully")
@@ -216,6 +270,91 @@ class JobManager:
                 del self.download_services[job_id]
             
             db.close()
+    
+    async def _run_download_phase(
+        self,
+        job_id: int,
+        playlist: Playlist,
+        download_service: DownloadService,
+        progress_callback: Callable,
+        log_callback: Callable,
+        db
+    ):
+        """Run download phase"""
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            job.download_status = "running"
+            db.commit()
+            
+            await log_callback("Starting download phase...")
+            
+            failed_ids = await download_service.download_playlist(
+                playlist.url,
+                set(playlist.excluded_ids or []),
+                progress_callback=progress_callback,
+                log_callback=log_callback
+            )
+            
+            # Update playlist
+            playlist.last_download = datetime.utcnow()
+            
+            # Add failed IDs to exclusions
+            if failed_ids:
+                existing = set(playlist.excluded_ids or [])
+                playlist.excluded_ids = list(existing.union(failed_ids))
+            
+            job.download_status = "completed"
+            job.download_failed = len(failed_ids)
+            db.commit()
+            
+            await log_callback(f"Download phase completed. Failed: {len(failed_ids)}")
+            
+        except Exception as e:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            job.download_status = "failed"
+            db.commit()
+            await log_callback(f"Download phase failed: {str(e)}")
+            raise
+    
+    async def _run_extraction_phase(
+        self,
+        job_id: int,
+        playlist: Playlist,
+        download_service: DownloadService,
+        progress_callback: Callable,
+        log_callback: Callable,
+        db
+    ):
+        """Run extraction phase (can run in parallel with download)"""
+        try:
+            # Wait a bit for first video to download
+            await asyncio.sleep(5)
+            
+            job = db.query(Job).filter(Job.id == job_id).first()
+            job.extract_status = "running"
+            db.commit()
+            
+            await log_callback("Starting extraction phase...")
+            
+            await download_service.extract_audio(
+                playlist.title,
+                progress_callback=progress_callback,
+                log_callback=log_callback
+            )
+            
+            # Update playlist
+            playlist.last_extract = datetime.utcnow()
+            job.extract_status = "completed"
+            db.commit()
+            
+            await log_callback("Extraction phase completed")
+            
+        except Exception as e:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            job.extract_status = "failed"
+            db.commit()
+            await log_callback(f"Extraction phase failed: {str(e)}")
+            raise
     
     async def cancel_job(self, job_id: int):
         """Cancel a running job"""

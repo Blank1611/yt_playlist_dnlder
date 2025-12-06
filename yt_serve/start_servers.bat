@@ -8,7 +8,7 @@ echo.
 
 REM Start backend in new window
 echo [1/2] Starting Backend (Python)...
-start "YT Manager - Backend" cmd /k "cd yt_serve\backend && python run.py"
+start "YT Manager - Backend" cmd /k "cd yt_serve\backend && E:\laptop_stuff\Harry Potter\testyoutube\ytdld\Scripts\python.exe run.py"
 timeout /t 3 /nobreak > nul
 
 REM Start frontend in new window

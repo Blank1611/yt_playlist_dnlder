@@ -34,6 +34,7 @@ export interface Config {
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string
+  needs_setup: boolean
 }
 
 export const configApi = {

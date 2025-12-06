@@ -1,4 +1,81 @@
-# yt_serve Documentation
+"""
+Organize all documentation files in yt_serve into DOCS subdirectory
+"""
+import shutil
+from pathlib import Path
+
+def organize_docs():
+    print("="*60)
+    print("Organizing yt_serve Documentation")
+    print("="*60)
+    print()
+    
+    # Get the directory where this script is located (yt_serve/)
+    yt_serve = Path(__file__).parent.resolve()
+    docs_dir = yt_serve / "DOCS"
+    
+    print(f"Working directory: {yt_serve}")
+    print()
+    
+    # Create DOCS directory if it doesn't exist
+    docs_dir.mkdir(exist_ok=True)
+    print(f"✓ Created/verified DOCS directory")
+    
+    # List of all markdown files to move (excluding README.md which stays in root)
+    doc_files = [
+        "BACKEND_CONFIG.md",
+        "BROWSER_LIMITATIONS.md",
+        "COMPLETE.md",
+        "COMPLETE_INSTALLER_SOLUTION.md",
+        "DEVELOPER_GUIDE.md",
+        "DOCS_ORGANIZATION.md",
+        "END_USER_GUIDE.md",
+        "END_USER_SOLUTIONS.md",
+        "EXCLUSIONS_FEATURE.md",
+        "FIRST_RUN_SETUP.md",
+        "FRONTEND_COMPLETE.md",
+        "GETTING_STARTED.md",
+        "IMPLEMENTATION_STATUS.md",
+        "INDEPENDENCE_COMPLETE.md",
+        "KNOWN_ISSUES.md",
+        "LATEST_IMPROVEMENTS.md",
+        "LOGGING_ARCHITECTURE.md",
+        "MAINTENANCE_NOTES.md",
+        "MIGRATION_GUIDE.md",
+        "MIGRATION_SUCCESS.md",
+        "NODE_MODULES_EXPLAINED.md",
+        "QUICKSTART.md",
+        "SETUP_GUIDE.md",
+        "TESTING_GUIDE.md",
+        "TROUBLESHOOTING.md",
+        "UI_IMPROVEMENTS.md",
+    ]
+    
+    # Move files
+    moved = 0
+    skipped = 0
+    
+    print("\nMoving documentation files...")
+    for file in doc_files:
+        src = yt_serve / file
+        dest = docs_dir / file
+        
+        if src.exists():
+            if dest.exists():
+                print(f"  ⚠ {file} already exists in DOCS/")
+                skipped += 1
+            else:
+                shutil.move(str(src), str(dest))
+                print(f"  ✓ {file} -> DOCS/")
+                moved += 1
+        else:
+            print(f"  - {file} not found (skipping)")
+    
+    # Create DOCS README
+    print("\nCreating DOCS/README.md...")
+    docs_readme = docs_dir / "README.md"
+    
+    readme_content = """# yt_serve Documentation
 
 Complete documentation for the YouTube Playlist Manager web application.
 
@@ -95,3 +172,31 @@ If you're adding new documentation:
 2. Update this README.md with a link
 3. Use clear, descriptive filenames
 4. Follow existing documentation style
+"""
+    
+    with open(docs_readme, 'w', encoding='utf-8') as f:
+        f.write(readme_content)
+    
+    print("  ✓ Created DOCS/README.md")
+    
+    print()
+    print("="*60)
+    print("Documentation Organization Complete!")
+    print("="*60)
+    print()
+    print(f"Moved: {moved} files")
+    print(f"Skipped: {skipped} files (already in DOCS/)")
+    print()
+    print("Structure:")
+    print("  yt_serve/")
+    print("    ├── README.md              (main project overview)")
+    print("    ├── DOCS/                  (all documentation)")
+    print("    │   ├── README.md         (documentation index)")
+    print(f"    │   └── ... ({moved} doc files)")
+    print("    ├── backend/")
+    print("    ├── frontend/")
+    print("    └── ... (other files)")
+    print()
+
+if __name__ == '__main__':
+    organize_docs()

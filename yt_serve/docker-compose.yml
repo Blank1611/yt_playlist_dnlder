@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  youtube-manager:
+    build: .
+    container_name: youtube-playlist-manager
+    ports:
+      - "8000:8000"  # Backend
+      - "5173:5173"  # Frontend
+    volumes:
+      - ./downloads:/downloads  # Download location
+      - ./data:/app/data        # Database and logs
+    environment:
+      - BASE_DOWNLOAD_PATH=/downloads
+      - AUDIO_EXTRACT_MODE=copy
+      - MAX_CONCURRENT_EXTRACTIONS=4
+      - BATCH_SIZE=200
+    restart: unless-stopped

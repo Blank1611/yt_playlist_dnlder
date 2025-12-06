@@ -19,6 +19,20 @@ export interface Job {
   total_items: number
   completed_items: number
   failed_items: number
+  
+  // Separate download progress
+  download_status: string | null
+  download_total: number
+  download_completed: number
+  download_failed: number
+  download_batch_info: string | null
+  
+  // Separate extraction progress
+  extract_status: string | null
+  extract_total: number
+  extract_completed: number
+  extract_failed: number
+  
   created_at: string
   started_at: string | null
   completed_at: string | null
