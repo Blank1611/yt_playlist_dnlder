@@ -3,6 +3,12 @@ Application configuration
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
+import os
+from pathlib import Path
+
+# Get the backend directory (where .env should be)
+BACKEND_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = BACKEND_DIR / ".env"
 
 class Settings(BaseSettings):
     """Application settings"""
@@ -12,7 +18,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "YouTube Playlist Manager"
     
     # Database
-    DATABASE_URL: str = "sqlite:///./yt_manager.db"
+    # Default to backend directory, but can be overridden in .env
+    DATABASE_PATH: str = "yt_manager.db"  # Relative to backend directory
     
     # Download settings
     BASE_DOWNLOAD_PATH: str = "downloads"
@@ -31,7 +38,26 @@ class Settings(BaseSettings):
     BROWSER_NAME: str = "chrome"
     
     class Config:
-        env_file = ".env"
+        env_file = str(ENV_FILE)
+        env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra fields in .env
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        
+        # Debug: Print loaded configuration
+        print(f"[CONFIG] Loaded settings:")
+        print(f"  BASE_DOWNLOAD_PATH: {self.BASE_DOWNLOAD_PATH}")
+        print(f"  .env file location: {ENV_FILE}")
+        print(f"  .env exists: {ENV_FILE.exists()}")
+        
+        # Create download path if it doesn't exist and is configured
+        if self.BASE_DOWNLOAD_PATH and self.BASE_DOWNLOAD_PATH != "downloads":
+            try:
+                os.makedirs(self.BASE_DOWNLOAD_PATH, exist_ok=True)
+                print(f"  Download path ready: {self.BASE_DOWNLOAD_PATH}")
+            except Exception as e:
+                print(f"  Warning: Could not create download path {self.BASE_DOWNLOAD_PATH}: {e}")
 
 settings = Settings()

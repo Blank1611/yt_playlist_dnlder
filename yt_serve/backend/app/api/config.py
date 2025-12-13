@@ -46,9 +46,12 @@ def _check_needs_setup() -> bool:
     if settings.BASE_DOWNLOAD_PATH == "downloads":
         return True
     
-    # Check if the path exists
-    if not os.path.exists(settings.BASE_DOWNLOAD_PATH):
+    # Check if BASE_DOWNLOAD_PATH is empty or not configured
+    if not settings.BASE_DOWNLOAD_PATH or settings.BASE_DOWNLOAD_PATH.strip() == "":
         return True
+    
+    # Don't check if path exists - the app will create it if needed
+    # This prevents the setup modal from appearing when the path is configured but not yet created
     
     return False
 

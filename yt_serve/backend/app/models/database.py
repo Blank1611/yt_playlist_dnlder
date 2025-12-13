@@ -5,8 +5,28 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+from pathlib import Path
+import os
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./yt_manager.db"
+# Import settings to get database path
+from app.core.config import settings
+
+# Resolve database path
+# If DATABASE_PATH is absolute, use it as-is
+# If relative, resolve it relative to backend directory
+BACKEND_DIR = Path(__file__).parent.parent.parent
+if os.path.isabs(settings.DATABASE_PATH):
+    DB_PATH = Path(settings.DATABASE_PATH)
+else:
+    DB_PATH = BACKEND_DIR / settings.DATABASE_PATH
+
+# Ensure parent directory exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+print(f"[DATABASE] Using database at: {DB_PATH}")
+print(f"[DATABASE] Database exists: {DB_PATH.exists()}")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}

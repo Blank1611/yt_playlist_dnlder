@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { playlistsApi, jobsApi, configApi, type Config } from './services/api'
-import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ChevronDown, ChevronRight } from 'lucide-react'
+import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import type { Playlist, Job } from './services/types'
+import { useWebSocketEvents } from './hooks/useWebSocket'
 
 function App() {
   const [newPlaylistUrl, setNewPlaylistUrl] = useState('')
@@ -21,6 +22,20 @@ function App() {
     return saved ? JSON.parse(saved) : false
   })
   const queryClient = useQueryClient()
+
+  // WebSocket event handler for real-time updates
+  const handleWebSocketEvent = useCallback((type: string, data: any) => {
+    if (type === 'playlist_updated') {
+      console.log('[UI] Playlist updated via WebSocket:', data)
+      // Force immediate refetch of playlists
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+      queryClient.refetchQueries({ queryKey: ['playlists'] })
+      console.log('[UI] Triggered playlist refetch')
+    }
+  }, [queryClient])
+
+  // Connect to WebSocket for real-time events
+  useWebSocketEvents(handleWebSocketEvent)
 
   // Save view mode to localStorage
   useEffect(() => {
@@ -44,10 +59,13 @@ function App() {
       const res = await configApi.get()
       return res.data
     },
+    staleTime: 0, // Always fetch fresh config
+    refetchOnMount: true,
   })
 
   // Show initial setup modal if needed
   useEffect(() => {
+    // Temporarily disabled - user already has config
     if (config?.needs_setup) {
       setShowInitialSetup(true)
     }
@@ -64,17 +82,21 @@ function App() {
     localStorage.setItem('darkMode', JSON.stringify(darkMode))
   }, [darkMode])
 
-  // Fetch playlists
+  // Fetch playlists (WebSocket provides real-time updates, polling is backup)
   const { data: playlists, isLoading: playlistsLoading } = useQuery({
     queryKey: ['playlists'],
     queryFn: async () => {
       const res = await playlistsApi.list()
       return res.data
     },
+    refetchInterval: 30000, // Poll every 30 seconds as backup (WebSocket is primary)
+    staleTime: 0, // Always consider data stale to ensure fresh fetches
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   })
 
   // Fetch jobs
-  const { data: jobs } = useQuery({
+  const { data: jobs, dataUpdatedAt } = useQuery({
     queryKey: ['jobs'],
     queryFn: async () => {
       const res = await jobsApi.list()
@@ -82,6 +104,29 @@ function App() {
     },
     refetchInterval: 2000, // Poll every 2 seconds
   })
+
+  // Track completed jobs to refetch playlists only once per completion
+  const [completedJobIds, setCompletedJobIds] = useState<Set<number>>(new Set())
+  
+  useEffect(() => {
+    if (jobs) {
+      const newlyCompleted = jobs.filter(j => 
+        (j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled') &&
+        !completedJobIds.has(j.id)
+      )
+      
+      if (newlyCompleted.length > 0) {
+        console.log(`[UI] Detected ${newlyCompleted.length} newly completed job(s), refreshing playlists...`)
+        
+        // Mark these jobs as seen
+        setCompletedJobIds(prev => new Set([...prev, ...newlyCompleted.map(j => j.id)]))
+        
+        // Immediately refetch playlists to get updated stats
+        queryClient.invalidateQueries({ queryKey: ['playlists'] })
+        queryClient.refetchQueries({ queryKey: ['playlists'] })
+      }
+    }
+  }, [jobs, completedJobIds, queryClient])
 
   // Add playlist mutation
   const addPlaylist = useMutation({
@@ -122,6 +167,18 @@ function App() {
     mutationFn: (id: number) => jobsApi.cancel(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+
+  // Open folder mutation (simple backend approach)
+  const openFolder = useMutation({
+    mutationFn: (id: number) => playlistsApi.openFolder(id),
+    onError: (error: any) => {
+      const errorDetail = error.response?.data?.detail || error.message
+      alert(`Error opening folder:\n\n${errorDetail}`)
+    },
+    onSuccess: (data) => {
+      console.log(`Folder opened: ${data.data.path}`)
     },
   })
 
@@ -244,10 +301,25 @@ function App() {
                     : 'bg-white dark:bg-gray-800'
                 }`}>
                   <div className="p-6">
-                    <h3 className="text-lg font-semibold mb-2 truncate text-gray-900 dark:text-white">
-                      {playlist.title}
-                      {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
-                    </h3>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 
+                        className="text-lg font-semibold truncate text-gray-900 dark:text-white cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors flex-1 mr-2 group"
+                        onClick={() => openFolder.mutate(playlist.id)}
+                        title="Open in explorer"
+                      >
+                        <span className="group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 px-2 py-1 rounded transition-colors">
+                          {playlist.title}
+                        </span>
+                        {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
+                      </h3>
+                      <button
+                        onClick={() => window.open(playlist.url, '_blank')}
+                        className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                        title="Open playlist in YouTube"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                    </div>
                     
                     {/* Stats */}
                     <div className="grid grid-cols-3 gap-2 mb-4 text-sm">
@@ -269,10 +341,12 @@ function App() {
                     {runningJob && (
                       <div className="mb-4 space-y-3">
                         {/* Download Progress */}
-                        {runningJob.download_status && runningJob.download_status !== 'completed' && (
+                        {(runningJob.download_status === 'pending' || runningJob.download_status === 'running') && (
                           <div>
                             <div className="flex justify-between text-sm mb-1">
-                              <span className="text-gray-600 dark:text-gray-400">📥 Downloading</span>
+                              <span className="text-gray-600 dark:text-gray-400">
+                                📥 {runningJob.download_status === 'pending' ? 'Preparing download...' : 'Downloading'}
+                              </span>
                               <span className="font-semibold text-gray-900 dark:text-white">
                                 {runningJob.download_completed} / {runningJob.download_total}
                               </span>
@@ -294,10 +368,12 @@ function App() {
                         )}
                         
                         {/* Extraction Progress */}
-                        {runningJob.extract_status && runningJob.extract_status !== 'completed' && (
+                        {(runningJob.extract_status === 'pending' || runningJob.extract_status === 'running') && (
                           <div>
                             <div className="flex justify-between text-sm mb-1">
-                              <span className="text-gray-600 dark:text-gray-400">🎵 Extracting Audio</span>
+                              <span className="text-gray-600 dark:text-gray-400">
+                                🎵 {runningJob.extract_status === 'pending' ? 'Preparing extraction...' : 'Extracting Audio'}
+                              </span>
                               <span className="font-semibold text-gray-900 dark:text-white">
                                 {runningJob.extract_completed} / {runningJob.extract_total}
                               </span>
@@ -440,87 +516,124 @@ function App() {
             })}
           </div>
         ) : (
-          /* List View */
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 dark:bg-gray-700">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Playlist</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Local</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Available</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Unavailable</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {playlists
-                  ?.slice()
-                  .sort((a, b) => {
-                    const aPending = Math.max(0, a.playlist_count - a.local_count)
-                    const bPending = Math.max(0, b.playlist_count - b.local_count)
-                    return bPending - aPending
-                  })
-                  .map((playlist) => {
-                    const runningJob = getRunningJob(playlist.id)
-                    const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
-                    const isExpanded = expandedRows.has(playlist.id)
-                    
-                    return (
-                      <React.Fragment key={playlist.id}>
-                        <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer ${
-                          isCaughtUp ? 'bg-green-50 dark:bg-green-900/20' : ''
-                        }`}>
-                          <td className="px-6 py-4">
-                            <button
-                              onClick={() => toggleRow(playlist.id)}
-                              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+          /* List View - Tile-based Rows */
+          <div className="space-y-3">
+            {playlists
+              ?.slice()
+              .sort((a, b) => {
+                const aPending = Math.max(0, a.playlist_count - a.local_count)
+                const bPending = Math.max(0, b.playlist_count - b.local_count)
+                return bPending - aPending
+              })
+              .map((playlist) => {
+                const runningJob = getRunningJob(playlist.id)
+                const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
+                const isExpanded = expandedRows.has(playlist.id)
+                
+                return (
+                  <div
+                    key={playlist.id}
+                    className={`rounded-lg shadow-md hover:shadow-lg transition-all ${
+                      isCaughtUp 
+                        ? 'bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-2 border-green-200 dark:border-green-800' 
+                        : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    {/* Main Row - Clickable */}
+                    <div
+                      onClick={() => toggleRow(playlist.id)}
+                      className="px-6 py-4 cursor-pointer hover:bg-gray-50/50 dark:hover:bg-gray-700/50 transition-colors rounded-t-lg"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        {/* Title and Status */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 
+                              className="text-lg font-semibold text-gray-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors group"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openFolder.mutate(playlist.id)
+                              }}
+                              title="Open in explorer"
                             >
-                              {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+                              <span className="group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 px-2 py-1 rounded transition-colors">
+                                {playlist.title}
+                              </span>
+                            </h3>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                window.open(playlist.url, '_blank')
+                              }}
+                              className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                              title="Open playlist in YouTube"
+                            >
+                              <ExternalLink className="w-4 h-4" />
                             </button>
-                          </td>
-                          <td className="px-6 py-4" onClick={() => toggleRow(playlist.id)}>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">
-                              {playlist.title}
-                              {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
-                            </div>
+                            {isCaughtUp && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                ✓ Complete
+                              </span>
+                            )}
                             {runningJob && (
-                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {runningJob.download_status === 'running' && `📥 Downloading ${runningJob.download_completed}/${runningJob.download_total}`}
-                                {runningJob.extract_status === 'running' && ` 🎵 Extracting ${runningJob.extract_completed}/${runningJob.extract_total}`}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
-                            <span className="text-sm font-semibold text-green-700 dark:text-green-400">{playlist.local_count}</span>
-                          </td>
-                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
-                            <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</span>
-                          </td>
-                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
-                            <span className="text-sm font-semibold text-red-700 dark:text-red-400">{playlist.unavailable_count}</span>
-                          </td>
-                          <td className="px-6 py-4 text-center" onClick={() => toggleRow(playlist.id)}>
-                            {runningJob ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                Running
-                              </span>
-                            ) : isCaughtUp ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                                Complete
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
-                                Pending
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 animate-pulse">
+                                ● Running
                               </span>
                             )}
-                          </td>
-                        </tr>
+                          </div>
+                          
+                          {/* Progress Info */}
+                          {runningJob && (
+                            <div className="text-xs text-gray-600 dark:text-gray-400 space-x-3">
+                              {runningJob.download_status === 'running' && (
+                                <span>📥 Downloading {runningJob.download_completed}/{runningJob.download_total}</span>
+                              )}
+                              {runningJob.extract_status === 'running' && (
+                                <span>🎵 Extracting {runningJob.extract_completed}/{runningJob.extract_total}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         
-                        {/* Expanded Row with Actions */}
-                        {isExpanded && (
-                          <tr className="bg-gray-50 dark:bg-gray-900">
-                            <td colSpan={6} className="px-6 py-4">
+                        {/* Stats with colored backgrounds */}
+                        <div className="flex items-center gap-3">
+                          <div className="text-center p-3 bg-green-50 dark:bg-green-900/30 rounded-lg min-w-[80px]">
+                            <div className="text-2xl font-bold text-green-700 dark:text-green-400">{playlist.local_count}</div>
+                            <div className="text-xs text-gray-600 dark:text-gray-400">Local</div>
+                          </div>
+                          <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg min-w-[80px]">
+                            <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</div>
+                            <div className="text-xs text-gray-600 dark:text-gray-400">Available</div>
+                          </div>
+                          <div className="text-center p-3 bg-red-50 dark:bg-red-900/30 rounded-lg min-w-[80px]">
+                            <div className="text-2xl font-bold text-red-700 dark:text-red-400">{playlist.unavailable_count}</div>
+                            <div className="text-xs text-gray-600 dark:text-gray-400">Unavailable</div>
+                          </div>
+                          
+                          {/* Last Activity - side by side */}
+                          {playlist.last_download && (
+                            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg min-w-[140px]">
+                              <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                {new Date(playlist.last_download).toLocaleDateString()}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Last Download</div>
+                            </div>
+                          )}
+                          {playlist.last_extract && (
+                            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg min-w-[140px]">
+                              <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                {new Date(playlist.last_extract).toLocaleDateString()}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Last Extract</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Expanded Section with Actions */}
+                    {isExpanded && (
+                      <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
                               <div className="space-y-4">
                                 {/* Progress Bars */}
                                 {runningJob && (
@@ -655,25 +768,12 @@ function App() {
                                     </>
                                   )}
                                 </div>
-                                
-                                {/* Metadata */}
-                                <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-                                  {playlist.last_download && (
-                                    <div>Last download: {new Date(playlist.last_download).toLocaleString()}</div>
-                                  )}
-                                  {playlist.last_extract && (
-                                    <div>Last extract: {new Date(playlist.last_extract).toLocaleString()}</div>
-                                  )}
-                                </div>
                               </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    )
-                  })}
-              </tbody>
-            </table>
+                            </div>
+                          )}
+                        </div>
+                      )
+              })}
           </div>
         )}
 
@@ -1195,6 +1295,15 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
   const [excludedIds, setExcludedIds] = useState<string[]>(playlist.excluded_ids || [])
   const [newId, setNewId] = useState('')
 
+  // Fetch video info (titles) for the playlist
+  const { data: videoInfo } = useQuery({
+    queryKey: ['videoInfo', playlist.id],
+    queryFn: async () => {
+      const res = await playlistsApi.getVideoInfo(playlist.id)
+      return res.data
+    },
+  })
+
   const updatePlaylist = useMutation({
     mutationFn: (data: Partial<Playlist>) => playlistsApi.update(playlist.id, data),
     onSuccess: () => {
@@ -1276,35 +1385,44 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
                 No videos excluded
               </div>
             ) : (
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {excludedIds.map((id) => (
-                  <div
-                    key={id}
-                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
-                  >
-                    <div className="flex items-center gap-3 flex-1">
-                      <code className="text-sm font-mono text-gray-900 dark:text-white">
-                        {id}
-                      </code>
-                      <a
-                        href={`https://www.youtube.com/watch?v=${id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                      >
-                        View on YouTube
-                      </a>
-                    </div>
-                    <button
-                      onClick={() => handleRemove(id)}
-                      className="p-1 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
-                      title="Remove from exclusions"
+              <ol className="space-y-2 max-h-96 overflow-y-auto">
+                {excludedIds.map((id, index) => {
+                  const info = videoInfo?.[id]
+                  const title = info?.title || id
+                  
+                  return (
+                    <li
+                      key={id}
+                      className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
                     >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                      <span className="text-sm font-semibold text-gray-600 dark:text-gray-400 min-w-[2rem] mt-0.5">
+                        {index + 1}.
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <a
+                          href={`https://www.youtube.com/watch?v=${id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline block truncate"
+                          title={`${title}\n\nClick to view on YouTube`}
+                        >
+                          {title}
+                        </a>
+                        <code className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                          {id}
+                        </code>
+                      </div>
+                      <button
+                        onClick={() => handleRemove(id)}
+                        className="p-1 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded flex-shrink-0"
+                        title="Remove from exclusions"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </li>
+                  )
+                })}
+              </ol>
             )}
           </div>
         </div>

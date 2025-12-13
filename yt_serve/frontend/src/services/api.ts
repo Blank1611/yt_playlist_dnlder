@@ -12,6 +12,8 @@ export const playlistsApi = {
   update: (id: number, data: Partial<Playlist>) => api.put<Playlist>(`/playlists/${id}`, data),
   delete: (id: number) => api.delete(`/playlists/${id}`),
   refresh: (id: number) => api.post<Playlist>(`/playlists/${id}/refresh`),
+  getVideoInfo: (id: number) => api.get<Record<string, { title: string; duration?: number; uploader?: string }>>(`/playlists/${id}/video-info`),
+  openFolder: (id: number) => api.post<{ message: string; path: string }>(`/playlists/${id}/open-folder`),
 }
 
 export const jobsApi = {

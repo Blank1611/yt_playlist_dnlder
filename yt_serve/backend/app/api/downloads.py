@@ -40,6 +40,20 @@ class JobResponse(BaseModel):
     total_items: int
     completed_items: int
     failed_items: int
+    
+    # Separate download progress
+    download_status: Optional[str]
+    download_total: int
+    download_completed: int
+    download_failed: int
+    download_batch_info: Optional[str]
+    
+    # Separate extraction progress
+    extract_status: Optional[str]
+    extract_total: int
+    extract_completed: int
+    extract_failed: int
+    
     created_at: str
     started_at: Optional[str]
     completed_at: Optional[str]
@@ -95,6 +109,15 @@ async def list_jobs(
             total_items=job.total_items,
             completed_items=job.completed_items,
             failed_items=job.failed_items,
+            download_status=job.download_status,
+            download_total=job.download_total,
+            download_completed=job.download_completed,
+            download_failed=job.download_failed,
+            download_batch_info=job.download_batch_info,
+            extract_status=job.extract_status,
+            extract_total=job.extract_total,
+            extract_completed=job.extract_completed,
+            extract_failed=job.extract_failed,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             completed_at=job.completed_at.isoformat() if job.completed_at else None,
@@ -167,6 +190,15 @@ async def create_job(
         total_items=db_job.total_items,
         completed_items=db_job.completed_items,
         failed_items=db_job.failed_items,
+        download_status=db_job.download_status,
+        download_total=db_job.download_total,
+        download_completed=db_job.download_completed,
+        download_failed=db_job.download_failed,
+        download_batch_info=db_job.download_batch_info,
+        extract_status=db_job.extract_status,
+        extract_total=db_job.extract_total,
+        extract_completed=db_job.extract_completed,
+        extract_failed=db_job.extract_failed,
         created_at=db_job.created_at.isoformat(),
         started_at=db_job.started_at.isoformat() if db_job.started_at else None,
         completed_at=db_job.completed_at.isoformat() if db_job.completed_at else None,
@@ -189,6 +221,15 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         total_items=job.total_items,
         completed_items=job.completed_items,
         failed_items=job.failed_items,
+        download_status=job.download_status,
+        download_total=job.download_total,
+        download_completed=job.download_completed,
+        download_failed=job.download_failed,
+        download_batch_info=job.download_batch_info,
+        extract_status=job.extract_status,
+        extract_total=job.extract_total,
+        extract_completed=job.extract_completed,
+        extract_failed=job.extract_failed,
         created_at=job.created_at.isoformat(),
         started_at=job.started_at.isoformat() if job.started_at else None,
         completed_at=job.completed_at.isoformat() if job.completed_at else None,

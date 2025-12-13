@@ -44,7 +44,8 @@ class DownloadService:
         url: str,
         excluded_ids: Set[str],
         progress_callback: Optional[Callable] = None,
-        log_callback: Optional[Callable] = None
+        log_callback: Optional[Callable] = None,
+        video_downloaded_callback: Optional[Callable] = None
     ) -> Set[str]:
         """
         Download playlist with progress and log callbacks
@@ -54,6 +55,7 @@ class DownloadService:
             excluded_ids: Set of video IDs to exclude
             progress_callback: Async function(total, current, batch_info=None) for progress updates
             log_callback: Async function(message) for log messages
+            video_downloaded_callback: Async function(video_path) called when a video is downloaded
         
         Returns:
             Set of failed video IDs
@@ -68,10 +70,9 @@ class DownloadService:
         tools.GLOBAL_RUNSTATE = runstate
         
         # Set up callbacks for existing tools
+        main_loop = asyncio.get_event_loop()
+        
         if progress_callback:
-            # Store the callback and loop for thread-safe calling
-            main_loop = asyncio.get_event_loop()
-            
             def sync_progress(total, current, batch_info=None):
                 try:
                     # Use call_soon_threadsafe to schedule the callback in the main loop
@@ -82,19 +83,63 @@ class DownloadService:
                 except Exception as e:
                     print(f"Progress callback error: {e}")
             
-            tools.GLOBAL_PROGRESS_CALLBACK = sync_progress
+            # Set download-specific callback
+            tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = sync_progress
         
-        # Run download in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        failed_ids = await loop.run_in_executor(
-            None,
-            tools.download_playlist_with_video_and_audio,
-            url,
-            False,  # as_mp3 = False (extraction will be done separately in parallel)
-            excluded_ids
+        if video_downloaded_callback:
+            def sync_video_downloaded(video_path: str):
+                try:
+                    # Use call_soon_threadsafe to schedule the callback in the main loop
+                    asyncio.run_coroutine_threadsafe(
+                        video_downloaded_callback(video_path),
+                        main_loop
+                    )
+                except Exception as e:
+                    print(f"Video downloaded callback error: {e}")
+            
+            # Set video downloaded callback
+            tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = sync_video_downloaded
+        
+        if log_callback:
+            def sync_log(message: str):
+                try:
+                    # Use call_soon_threadsafe to schedule the callback in the main loop
+                    asyncio.run_coroutine_threadsafe(
+                        log_callback(message),
+                        main_loop
+                    )
+                except Exception as e:
+                    print(f"Log callback error: {e}")
+            
+            # Set log callback
+            tools.GLOBAL_LOG_CALLBACK = sync_log
+        
+        # Run download in dedicated thread pool to avoid blocking
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        
+        # Create dedicated download thread pool with custom naming
+        download_executor = ThreadPoolExecutor(
+            max_workers=1,  # Downloads are sequential anyway
+            thread_name_prefix="DownloadThread"
         )
         
-        return failed_ids
+        loop = asyncio.get_event_loop()
+        try:
+            failed_ids = await loop.run_in_executor(
+                download_executor,
+                tools.download_playlist_with_video_and_audio,
+                url,
+                False,  # as_mp3 = False (extraction will be done separately in parallel)
+                excluded_ids
+            )
+            return failed_ids
+        finally:
+            # Clean up thread pool and callbacks
+            download_executor.shutdown(wait=False)
+            tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = None
+            tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None
+            tools.GLOBAL_LOG_CALLBACK = None
     
     async def extract_audio(
         self,
@@ -114,13 +159,13 @@ class DownloadService:
             raise RuntimeError("yt_playlist_audio_tools not available")
         
         # Set up callbacks
+        main_loop = asyncio.get_event_loop()
+        
         if progress_callback:
-            # Store the callback and loop for thread-safe calling
-            main_loop = asyncio.get_event_loop()
-            
-            def sync_progress(total, current):
+            def sync_progress(total, current, batch_info=None):
                 try:
                     # Use call_soon_threadsafe to schedule the callback in the main loop
+                    # Note: extraction doesn't use batch_info, so we ignore it
                     asyncio.run_coroutine_threadsafe(
                         progress_callback(total, current),
                         main_loop
@@ -128,15 +173,35 @@ class DownloadService:
                 except Exception as e:
                     print(f"Progress callback error: {e}")
             
-            tools.GLOBAL_PROGRESS_CALLBACK = sync_progress
+            # Set extraction-specific callback
+            tools.GLOBAL_EXTRACT_PROGRESS_CALLBACK = sync_progress
+        
+        if log_callback:
+            def sync_log(message: str):
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        log_callback(message),
+                        main_loop
+                    )
+                except Exception as e:
+                    print(f"Log callback error: {e}")
+            
+            tools.GLOBAL_LOG_CALLBACK = sync_log
         
         # Run extraction in thread pool
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            tools.extract_audio_for_existing_playlist,
-            playlist_title
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                tools.extract_audio_for_existing_playlist,
+                playlist_title
+            )
+        finally:
+            # Clean up callbacks to prevent interference with other operations
+            tools.GLOBAL_EXTRACT_PROGRESS_CALLBACK = None
+            tools.GLOBAL_LOG_CALLBACK = None
+    
+
     
     async def get_playlist_info(self, url: str) -> dict:
         """Get playlist information"""
@@ -187,12 +252,19 @@ class DownloadService:
         )
         
         # Count available and unavailable
+        # Don't pass excluded_set to is_entry_unavailable - we want to count them separately
         excluded_set = set(excluded_ids or [])
         available_count = 0
         unavailable_count = 0
         
         for e in entries:
-            if tools.is_entry_unavailable(e, excluded_set):
+            vid = e.get("id")
+            
+            # Check if video is in excluded list
+            if vid and vid in excluded_set:
+                unavailable_count += 1  # Excluded videos are shown as unavailable
+            # Check if video is actually unavailable (private, deleted, etc.)
+            elif tools.is_entry_unavailable(e, None):  # Pass None to not check excluded_ids
                 unavailable_count += 1
             else:
                 available_count += 1
