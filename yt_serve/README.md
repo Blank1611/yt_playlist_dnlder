@@ -1,6 +1,6 @@
-# YouTube Playlist Manager - Web Version
+# Playlist Manager - Web Version
 
-A modern web-based YouTube playlist manager with React frontend and FastAPI backend.
+A modern web-based playlist manager with React frontend and FastAPI backend. Currently supports YouTube with extensible architecture for additional platforms.
 
 ## Quick Start
 

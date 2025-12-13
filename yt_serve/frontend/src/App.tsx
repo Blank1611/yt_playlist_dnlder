@@ -195,7 +195,7 @@ function App() {
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 shadow">
         <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">YouTube Playlist Manager</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Playlist Manager</h1>
           
           <div className="flex gap-2">
             {/* View Mode Toggle */}
@@ -258,7 +258,7 @@ function App() {
               type="text"
               value={newPlaylistUrl}
               onChange={(e) => setNewPlaylistUrl(e.target.value)}
-              placeholder="https://www.youtube.com/playlist?list=..."
+              placeholder="https://www.youtube.com/playlist?list=... (YouTube supported)"
               className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
             />
             <button
@@ -318,7 +318,7 @@ function App() {
                       <button
                         onClick={() => window.open(playlist.url, '_blank')}
                         className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                        title="Open playlist in YouTube"
+                        title="Open playlist in browser"
                       >
                         <ExternalLink className="w-4 h-4" />
                       </button>
@@ -332,7 +332,7 @@ function App() {
                       </div>
                       <div className="text-center p-2 bg-blue-50 dark:bg-blue-900/30 rounded">
                         <div className="font-semibold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</div>
-                        <div className="text-gray-600 dark:text-gray-400">YouTube Available</div>
+                        <div className="text-gray-600 dark:text-gray-400">Available</div>
                       </div>
                       <div className="text-center p-2 bg-red-50 dark:bg-red-900/30 rounded">
                         <div className="font-semibold text-red-700 dark:text-red-400">{playlist.unavailable_count}</div>
@@ -572,7 +572,7 @@ function App() {
                                 window.open(playlist.url, '_blank')
                               }}
                               className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                              title="Open playlist in YouTube"
+                              title="Open playlist in browser"
                             >
                               <ExternalLink className="w-4 h-4" />
                             </button>
@@ -880,11 +880,11 @@ function InitialSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
                 value={formData.base_download_path || ''}
                 onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="E:\Music\YouTube"
+                placeholder="E:\Music\Playlists"
                 required
               />
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                Full path where playlists will be downloaded (e.g., E:\Music\YouTube)
+                Full path where playlists will be downloaded (e.g., E:\Music\Playlists)
               </p>
             </div>
 
@@ -992,7 +992,7 @@ function InitialSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Limit downloads per day to avoid YouTube bot detection
+                    Limit downloads per day to avoid platform rate limiting
                   </p>
                 </div>
               </div>
@@ -1123,7 +1123,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                     value={formData.base_download_path || ''}
                     onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
                     className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="E:\\Music\\YouTube"
+                    placeholder="E:\\Music\\Playlists"
                   />
                   <button
                     type="button"
@@ -1196,7 +1196,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Limit downloads per day to avoid YouTube bot detection
+                  Limit downloads per day to avoid platform rate limiting
                 </p>
               </div>
 
@@ -1367,7 +1367,7 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
                 value={newId}
                 onChange={(e) => setNewId(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleAdd()}
-                placeholder="Enter YouTube video ID (e.g., dQw4w9WgXcQ)"
+                placeholder="Enter video ID (e.g., dQw4w9WgXcQ)"
                 className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
               <button
@@ -1410,7 +1410,7 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm text-blue-600 dark:text-blue-400 hover:underline block truncate"
-                          title={`${title}\n\nClick to view on YouTube`}
+                          title={`${title}\n\nClick to view in browser`}
                         >
                           {title}
                         </a>

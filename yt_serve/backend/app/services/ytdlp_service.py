@@ -1,5 +1,5 @@
 """
-YouTube download service - wraps existing yt_playlist_audio_tools.py logic
+Download service - wraps existing yt_playlist_audio_tools.py logic for playlist operations
 """
 import sys
 import os

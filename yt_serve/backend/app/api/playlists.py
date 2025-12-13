@@ -1,5 +1,5 @@
 """
-Playlist management API endpoints
+Playlist management API endpoints for multi-platform playlist operations
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import List, Optional

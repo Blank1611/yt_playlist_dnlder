@@ -3,7 +3,7 @@
 yt_playlist_audio_tools.py
 
 Shared tools for:
-1) Downloading YouTube playlists with best video + audio and extracting MP3s.
+1) Downloading playlists with best video + audio and extracting MP3s.
 2) Extracting MP3s later from already-downloaded playlist videos.
 
 This version adds:
