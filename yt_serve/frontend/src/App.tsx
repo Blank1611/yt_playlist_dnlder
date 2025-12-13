@@ -293,21 +293,24 @@ function App() {
               .map((playlist) => {
               const runningJob = getRunningJob(playlist.id)
               const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
+              const hasPendingDownloads = playlist.local_count < playlist.playlist_count && playlist.playlist_count > 0
               
               return (
-                <div key={playlist.id} className={`rounded-lg shadow hover:shadow-lg transition-shadow ${
+                <div key={playlist.id} className={`rounded-lg shadow hover:shadow-lg transition-shadow playlist-card-light-hover playlist-card-dark-hover ${
                   isCaughtUp 
-                    ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800' 
+                    ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800 playlist-complete-glow' 
+                    : hasPendingDownloads
+                    ? 'bg-white dark:bg-gray-800 playlist-pending-glow'
                     : 'bg-white dark:bg-gray-800'
                 }`}>
                   <div className="p-6">
                     <div className="flex items-center justify-between mb-2">
                       <h3 
-                        className="text-lg font-semibold truncate text-gray-900 dark:text-white cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors flex-1 mr-2 group"
+                        className="text-lg font-semibold truncate text-gray-900 dark:text-white cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-all flex-1 mr-2 group"
                         onClick={() => openFolder.mutate(playlist.id)}
                         title="Open in explorer"
                       >
-                        <span className="group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 px-2 py-1 rounded transition-colors">
+                        <span className="playlist-title-glow">
                           {playlist.title}
                         </span>
                         {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
@@ -528,14 +531,17 @@ function App() {
               .map((playlist) => {
                 const runningJob = getRunningJob(playlist.id)
                 const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
+                const hasPendingDownloads = playlist.local_count < playlist.playlist_count && playlist.playlist_count > 0
                 const isExpanded = expandedRows.has(playlist.id)
                 
                 return (
                   <div
                     key={playlist.id}
-                    className={`rounded-lg shadow-md hover:shadow-lg transition-all ${
+                    className={`rounded-lg shadow-md hover:shadow-lg transition-all playlist-card-light-hover playlist-card-dark-hover ${
                       isCaughtUp 
-                        ? 'bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-2 border-green-200 dark:border-green-800' 
+                        ? 'bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-2 border-green-200 dark:border-green-800 playlist-complete-glow' 
+                        : hasPendingDownloads
+                        ? 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 playlist-pending-glow'
                         : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
                     }`}
                   >
@@ -549,14 +555,14 @@ function App() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <h3 
-                              className="text-lg font-semibold text-gray-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors group"
+                              className="text-lg font-semibold text-gray-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-all group"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 openFolder.mutate(playlist.id)
                               }}
                               title="Open in explorer"
                             >
-                              <span className="group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 px-2 py-1 rounded transition-colors">
+                              <span className="playlist-title-glow">
                                 {playlist.title}
                               </span>
                             </h3>
