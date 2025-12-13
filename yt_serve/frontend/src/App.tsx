@@ -1382,17 +1382,64 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
 
           {/* Excluded IDs List */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Excluded Video IDs ({excludedIds.length})
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Excluded Video IDs ({excludedIds.length})
+              </label>
+              {excludedIds.length > 0 && (
+                <button
+                  onClick={() => {
+                    // Search for all excluded video titles on YouTube
+                    // Open all tabs immediately to preserve user gesture context
+                    excludedIds.forEach((id) => {
+                      const info = videoInfo?.[id]
+                      const title = info?.title || id
+                      const searchQuery = encodeURIComponent(title)
+                      window.open(`https://www.youtube.com/results?search_query=${searchQuery}`, '_blank')
+                    })
+                  }}
+                  className="text-xs px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-200 dark:hover:bg-yellow-900/50 rounded-full transition-colors"
+                  title={`Search for all ${excludedIds.length} excluded video titles on YouTube`}
+                >
+                  🔍 Search All ({excludedIds.length})
+                </button>
+              )}
+            </div>
             
             {excludedIds.length === 0 ? (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 No videos excluded
               </div>
             ) : (
-              <ol className="space-y-2 max-h-96 overflow-y-auto">
-                {excludedIds.map((id, index) => {
+              <ol className="space-y-2 max-h-96 overflow-y-auto pr-2 -mr-2">
+                {excludedIds
+                  .slice() // Create a copy to avoid mutating original array
+                  .sort((a, b) => {
+                    const infoA = videoInfo?.[a]
+                    const infoB = videoInfo?.[b]
+                    const titleA = infoA?.title || a
+                    const titleB = infoB?.title || b
+                    
+                    // Define priority levels (lower number = higher priority)
+                    const getPriority = (title: string, id: string) => {
+                      if (title === id) return 4 // No title info (just video ID)
+                      if (title.includes('[Deleted video]')) return 3 // Deleted videos
+                      if (title.includes('[Private video]')) return 2 // Private videos
+                      return 1 // Videos with actual titles
+                    }
+                    
+                    const priorityA = getPriority(titleA, a)
+                    const priorityB = getPriority(titleB, b)
+                    
+                    // Sort by priority first
+                    if (priorityA !== priorityB) {
+                      return priorityA - priorityB
+                    }
+                    
+                    // Within same priority, sort alphabetically by title
+                    return titleA.localeCompare(titleB)
+                  })
+                  .map((id, index) => {
                   const info = videoInfo?.[id]
                   const title = info?.title || id
                   
@@ -1405,26 +1452,68 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
                         {index + 1}.
                       </span>
                       <div className="flex-1 min-w-0">
-                        <a
-                          href={`https://www.youtube.com/watch?v=${id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline block truncate"
-                          title={`${title}\n\nClick to view in browser`}
-                        >
-                          {title}
-                        </a>
+                        <div className="flex items-center gap-2 mb-1">
+                          <a
+                            href={`https://www.youtube.com/watch?v=${id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-blue-600 dark:text-blue-400 hover:underline truncate"
+                            title={`${title}\n\nClick to view in browser`}
+                          >
+                            {title}
+                          </a>
+                          {(() => {
+                            // Determine status badge based on title
+                            if (title === id) {
+                              return (
+                                <span className="text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-full">
+                                  Unknown
+                                </span>
+                              )
+                            } else if (title.includes('[Deleted video]')) {
+                              return (
+                                <span className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-full">
+                                  Likely Gone
+                                </span>
+                              )
+                            } else if (title.includes('[Private video]')) {
+                              return (
+                                <span className="text-xs px-2 py-0.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full">
+                                  Might Return
+                                </span>
+                              )
+                            } else {
+                              return (
+                                <span className="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full">
+                                  Searchable
+                                </span>
+                              )
+                            }
+                          })()}
+                        </div>
                         <code className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                           {id}
                         </code>
                       </div>
-                      <button
-                        onClick={() => handleRemove(id)}
-                        className="p-1 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded flex-shrink-0"
-                        title="Remove from exclusions"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button
+                          onClick={() => {
+                            const searchQuery = encodeURIComponent(title)
+                            window.open(`https://www.youtube.com/results?search_query=${searchQuery}`, '_blank')
+                          }}
+                          className="p-1 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-100 dark:hover:bg-yellow-900/30 rounded text-xs px-2 py-1"
+                          title={`Search "${title}" on YouTube\n\nUseful if video was removed and re-uploaded`}
+                        >
+                          🔍 Search
+                        </button>
+                        <button
+                          onClick={() => handleRemove(id)}
+                          className="p-1 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                          title="Remove from exclusions"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </li>
                   )
                 })}
